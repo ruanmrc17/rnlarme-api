@@ -28,7 +28,6 @@ client.connect().then(() => {
 });
 
 // --- Middleware de Autenticação ---
-// (Verifica o "Token" em todas as rotas protegidas)
 const autenticarToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1]; // Formato: "Bearer TOKEN"
@@ -44,7 +43,6 @@ const autenticarToken = (req, res, next) => {
 
 // --- Funções Auxiliares (Copiadas do seu main.js) ---
 async function verificarDisponibilidade(horario, userId, alarmeIdParaIgnorar = null) {
-    // (A mesma função que já criamos)
     if (!db || !userId) return false;
     const data = new Date(horario);
     const rangeInicio = new Date(data); rangeInicio.setSeconds(0, 0);
@@ -60,38 +58,72 @@ async function verificarDisponibilidade(horario, userId, alarmeIdParaIgnorar = n
     return (count < 3);
 }
 
+// ==================================================================
+// FUNÇÃO CORRIGIDA
+// ==================================================================
 function calcularProximaRecorrencia(alarme) {
-    // (A mesma função que já criamos)
     let proximoHorario = new Date(alarme.Horario);
+    const agora = new Date(); // Pega a hora atual
+
     const tipo = alarme.RecorrenciaTipo; 
     const hora = proximoHorario.getHours();
     const minuto = proximoHorario.getMinutes();
     const segundo = proximoHorario.getSeconds();
-    if (tipo === "Semanal" || tipo === 0) {
-        const diasDaSemana = (alarme.DiasDaSemana || []).map(Number).filter(d => !isNaN(d)).sort((a, b) => a - b);
-        if (diasDaSemana.length === 0) return proximoHorario; 
-        let diaAtual = proximoHorario.getDay(); 
-        let proximoDia = diasDaSemana.find(dia => dia > diaAtual);
-        if (proximoDia === undefined) {
-            let diasParaSomar = (7 - diaAtual) + diasDaSemana[0];
-            proximoHorario.setDate(proximoHorario.getDate() + diasParaSomar);
+
+    // --- CORREÇÃO: Loop para garantir que a próxima data esteja no futuro ---
+    // Este loop vai rodar 1 ou 2 vezes no máximo em casos de "catch-up"
+    // (ex: alarme era 09:00, agora é 11:00, ele vai pular para o próximo dia válido)
+    while (proximoHorario <= agora) {
+        
+        let dataOriginal = new Date(proximoHorario); // Pega a data de base para o cálculo
+
+        if (tipo === "Semanal" || tipo === 0) {
+            const diasDaSemana = (alarme.DiasDaSemana || []).map(Number).filter(d => !isNaN(d)).sort((a, b) => a - b);
+            if (diasDaSemana.length === 0) {
+                 // Não é recorrente de verdade, só avança 1 dia e sai do loop
+                 proximoHorario.setDate(dataOriginal.getDate() + 1);
+                 break;
+            }
+            
+            let diaAtual = dataOriginal.getDay(); 
+            let proximoDia = diasDaSemana.find(dia => dia > diaAtual);
+            
+            if (proximoDia === undefined) {
+                // Passa para a próxima semana
+                let diasParaSomar = (7 - diaAtual) + diasDaSemana[0];
+                proximoHorario.setDate(dataOriginal.getDate() + diasParaSomar);
+            } else {
+                // Próximo dia na mesma semana
+                let diasParaSomar = proximoDia - diaAtual;
+                proximoHorario.setDate(dataOriginal.getDate() + diasParaSomar);
+            }
+        } else if (tipo === "Mensal") {
+            const diasDoMes = (alarme.DiasDoMes || []).map(Number).filter(d => !isNaN(d)).sort((a, b) => a - b);
+            if (diasDoMes.length === 0) {
+                proximoHorario.setDate(dataOriginal.getDate() + 1);
+                break;
+            }
+            
+            let diaAtual = dataOriginal.getDate();
+            let proximoDia = diasDoMes.find(dia => dia > diaAtual);
+            
+            if (proximoDia === undefined) {
+                proximoHorario.setMonth(dataOriginal.getMonth() + 1);
+                proximoHorario.setDate(diasDoMes[0]);
+            } else {
+                proximoHorario.setDate(proximoDia);
+            }
         } else {
-            let diasParaSomar = proximoDia - diaAtual;
-            proximoHorario.setDate(proximoHorario.getDate() + diasParaSomar);
+             // Tipo desconhecido, sai do loop para evitar infinito
+             proximoHorario.setDate(dataOriginal.getDate() + 1);
+             break;
         }
-    } else if (tipo === "Mensal") {
-        const diasDoMes = (alarme.DiasDoMes || []).map(Number).filter(d => !isNaN(d)).sort((a, b) => a - b);
-        if (diasDoMes.length === 0) return proximoHorario;
-        let diaAtual = proximoHorario.getDate();
-        let proximoDia = diasDoMes.find(dia => dia > diaAtual);
-        if (proximoDia === undefined) {
-            proximoHorario.setMonth(proximoHorario.getMonth() + 1);
-            proximoHorario.setDate(diasDoMes[0]);
-        } else {
-            proximoHorario.setDate(proximoDia);
-        }
+        
+        // Define a hora/minuto na *nova* data
+        proximoHorario.setHours(hora, minuto, segundo, 0);
     }
-    proximoHorario.setHours(hora, minuto, segundo, 0);
+    // --- FIM DA CORREÇÃO ---
+
     return proximoHorario;
 }
 
@@ -112,7 +144,6 @@ app.post('/login', async (req, res) => {
         }
         const match = await bcrypt.compare(password, user.PasswordHash);
         if (match) {
-            // Cria um Token JWT que expira em 30 dias
             const token = jwt.sign({ id: user._id }, jwtSecret, { expiresIn: '30d' });
             res.json({ success: true, token: token });
         } else {
@@ -123,8 +154,9 @@ app.post('/login', async (req, res) => {
     }
 });
 
-// Rota de Checagem (só para o serviço de fundo)
-// Esta é uma rota especial que o Electron vai chamar
+// ==================================================================
+// ROTA CORRIGIDA
+// ==================================================================
 app.post('/checar-alarmes', autenticarToken, async (req, res) => {
     const userId = req.userId;
     const agora = new Date();
@@ -133,34 +165,51 @@ app.post('/checar-alarmes', autenticarToken, async (req, res) => {
     try {
         const query = {
             UserId: new ObjectId(userId),
-            Horario: { $lte: agora },
+            Horario: { $lte: agora }, // Pega TODOS os alarmes no passado
             $or: [
-                { Status: { $in: ["Ativo", 0] } },
-                { IsRecorrente: true, Status: { $in: statusHistorico } }
+                { Status: { $in: ["Ativo", 0] } }, // Ativos
+                // E recorrentes que já foram "vistos" mas precisam ser reagendados
+                { IsRecorrente: true, Status: { $in: statusHistorico } } 
             ]
         };
         
-        const alarmesParaDisparar = await db.collection('alarmes').find(query).toArray();
+        const alarmesParaProcessar = await db.collection('alarmes').find(query).toArray();
         let alarmesNotificaveis = [];
 
-        for (const alarme of alarmesParaDisparar) {
-            const diffMinutos = (agora.getTime() - new Date(alarme.Horario).getTime()) / (1000 * 60);
-            if (diffMinutos < 60) {
-                // Prepara para enviar ao Electron
-                alarmesNotificaveis.push({ ...alarme, _id: alarme._id.toString() });
-            }
+        for (const alarme of alarmesParaProcessar) {
             
             if (alarme.IsRecorrente) {
+                // --- CORREÇÃO PARA RECORRENTES ---
+                
+                // 1. Sempre notificar, não importa o quão "atrasado"
+                alarmesNotificaveis.push({ ...alarme, _id: alarme._id.toString() });
+                
+                // 2. Calcular a PRÓXIMA data futura (usando a função corrigida)
                 const proximoHorario = calcularProximaRecorrencia(alarme);
+                
+                // 3. Atualizar o alarme no DB para a próxima data futura
                 await db.collection('alarmes').updateOne(
-                    { _id: alarme._id }, { $set: { Horario: proximoHorario, Status: "Ativo" } }
+                    { _id: alarme._id }, 
+                    { $set: { Horario: proximoHorario, Status: "Ativo" } }
                 );
+                
             } else {
+                // --- LÓGICA ANTIGA PARA NÃO RECORRENTES ---
+                
+                // 1. Apenas notifica se for um "atraso" recente (app estava fechado < 60min)
+                const diffMinutos = (agora.getTime() - new Date(alarme.Horario).getTime()) / (1000 * 60);
+                if (diffMinutos < 60) {
+                    alarmesNotificaveis.push({ ...alarme, _id: alarme._id.toString() });
+                }
+                
+                // 2. Mover para o histórico (independente de notificar ou não)
                 await db.collection('alarmes').updateOne(
-                    { _id: alarme._id }, { $set: { Status: "DisparadoVisto", DataHistorico: new Date() } }
+                    { _id: alarme._id }, 
+                    { $set: { Status: "DisparadoVisto", DataHistorico: new Date() } }
                 );
             }
         }
+        
         // Retorna apenas os alarmes que devem tocar AGORA
         res.json({ success: true, alarmes: alarmesNotificaveis });
         
@@ -171,7 +220,7 @@ app.post('/checar-alarmes', autenticarToken, async (req, res) => {
 
 
 // --- ROTAS CRUD (Create, Read, Update, Delete) ---
-// Todas as rotas abaixo usam o middleware 'autenticarToken'
+// (Sem mudanças daqui para baixo)
 
 app.get('/alarmes/ativos', autenticarToken, async (req, res) => {
     const alarmes = await db.collection('alarmes').find({ 
@@ -221,7 +270,7 @@ app.post('/alarmes/create', autenticarToken, async (req, res) => {
         const novoAlarme = {
             Horario: novoHorario, Mensagem: alarme.Mensagem, IsRecorrente: alarme.IsRecorrente,
             RecorrenciaTipo: alarme.IsRecorrente ? alarme.RecorrenciaTipo : null,
-            DiasDaSemana: alarme.IsRecorrente && alarme.RecorrenciaTipo === 'Semanal' ? alarme.DiasDaSemana : [],
+            DiasDaSemana: alarme.IsRecorrente && (alarme.RecorrenciaTipo === 'Semanal' || alarme.RecorrenciaTipo === 0) ? alarme.DiasDaSemana : [],
             DiasDoMes: alarme.IsRecorrente && alarme.RecorrenciaTipo === 'Mensal' ? alarme.DiasDoMes : [],
             RecorrenciaInfo: alarme.RecorrenciaInfo || "",
             UserId: new ObjectId(req.userId), Status: "Ativo",
@@ -248,7 +297,7 @@ app.put('/alarmes/:id', autenticarToken, async (req, res) => {
         const updateData = {
             Horario: novoHorario, Mensagem: alarme.Mensagem, IsRecorrente: alarme.IsRecorrente,
             RecorrenciaTipo: alarme.IsRecorrente ? alarme.RecorrenciaTipo : null,
-            DiasDaSemana: alarme.IsRecorrente && alarme.RecorrenciaTipo === 'Semanal' ? alarme.DiasDaSemana : [],
+            DiasDaSemana: alarme.IsRecorrente && (alarme.RecorrenciaTipo === 'Semanal' || alarme.RecorrenciaTipo === 0) ? alarme.DiasDaSemana : [],
             DiasDoMes: alarme.IsRecorrente && alarme.RecorrenciaTipo === 'Mensal' ? alarme.DiasDoMes : [],
             RecorrenciaInfo: alarme.RecorrenciaInfo || "", Status: "Ativo"
         };
@@ -315,6 +364,38 @@ app.post('/adiar/:id', autenticarToken, async (req, res) => {
         res.status(500).json({ success: false, message: e.message });
     }
 });
+
+// Rota de Limpeza (Cron Job)
+app.get('/tasks/cleanup-old-history', async (req, res) => {
+    
+    const cronSecret = req.headers['x-cron-secret'];
+    if (cronSecret !== process.env.CRON_SECRET) {
+        return res.sendStatus(401); // Não autorizado
+    }
+    
+    try {
+        const dataLimite = new Date();
+        dataLimite.setDate(dataLimite.getDate() - 30);
+        const statusDeHistorico = ["DisparadoVisto", 1, 2, 3]; 
+
+        const resultado = await db.collection('alarmes').deleteMany({
+            Status: { $in: statusDeHistorico }, 
+            Horario: { $lt: dataLimite } 
+        });
+
+        console.log(`[LIMPEZA CRON] ${resultado.deletedCount} alarmes antigos foram apagados.`);
+        
+        res.status(200).json({
+            message: "Limpeza de alarmes antigos concluída.",
+            deletedCount: resultado.deletedCount
+        });
+
+    } catch (e) {
+        console.error("[LIMPEZA CRON] Erro ao executar tarefa:", e);
+        res.status(500).json({ error: "Erro interno ao executar limpeza." });
+    }
+});
+
 
 
 // --- Iniciar Servidor ---
