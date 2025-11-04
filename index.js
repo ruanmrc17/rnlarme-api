@@ -57,14 +57,25 @@ app.post('/login', async (req, res) => {
             return res.status(401).json({ success: false, message: 'Usuário não encontrado.' });
         }
 
-        // CORREÇÃO: use 'user.password' (minúsculo)
-        const match = await bcrypt.compare(password, user.Password);
+        // --- CORREÇÃO APLICADA ---
+        // Buscando o hash da senha no campo correto: "PasswordHash"
+        const storedHash = user.PasswordHash; 
+
+        if (!storedHash) {
+            console.error(`Erro Crítico: Usuário '${username}' encontrado, mas não possui campo 'PasswordHash' no DB.`);
+            return res.status(500).json({ success: false, message: 'Erro de configuração da conta. Contate o suporte.' });
+        }
+        // --- FIM DA CORREÇÃO ---
+
+        // Agora, compara a senha enviada com o hash que encontramos
+        const match = await bcrypt.compare(password, storedHash); 
+        
         if (match) {
             // Senha correta, gerar token
             const token = jwt.sign(
-                { userId: user._id.toString() }, // Salva o ID do usuário no token
+                { userId: user._id.toString() }, 
                 jwtSecret,
-                { expiresIn: '30d' } // Token expira em 30 dias
+                { expiresIn: '30d' } 
             );
             res.json({ success: true, token: token });
         } else {
@@ -76,7 +87,6 @@ app.post('/login', async (req, res) => {
         res.status(500).json({ success: false, message: 'Erro interno do servidor.' });
     }
 });
-
 // (Opcional: Rota para criar usuário, caso precise)
 // app.post('/register', async (req, res) => { ... });
 
