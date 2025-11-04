@@ -1,6 +1,5 @@
-// index.js (Servidor Backend - CORREÇÃO HÍBRIDA FINAL)
+// index.js (Servidor Backend - v8 "CORREÇÃO HÍBRIDA" FINAL)
 require('dotenv').config();
-// IMPORTANTE: Agora precisamos do ObjectId novamente
 const { MongoClient, ObjectId } = require('mongodb'); 
 const express = require('express');
 const bcrypt = require('bcrypt');
@@ -46,6 +45,7 @@ const autenticarToken = (req, res, next) => {
             return res.sendStatus(403);
         }
         
+        // userId (do token) vai ser SEMPRE uma string
         const userIdFromToken = user.userId || user.id;
 
         if (!userIdFromToken) {
@@ -53,7 +53,7 @@ const autenticarToken = (req, res, next) => {
             return res.sendStatus(403); 
         }
 
-        req.userId = userIdFromToken; // req.userId é uma STRING
+        req.userId = userIdFromToken.trim(); // req.userId é uma STRING
         console.log(`[LOG Autenticar] Token OK. UserId (string) definido como: ${req.userId}`);
         
         next();
@@ -86,7 +86,7 @@ app.post('/login', async (req, res) => {
         const match = await bcrypt.compare(password, storedHash); 
         
         if (match) {
-            // O _id do user (ObjectId) é convertido para string para o token
+            // .toString() funciona quer o user._id seja String ou ObjectId
             const token = jwt.sign(
                 { userId: user._id.toString() }, 
                 jwtSecret,
@@ -131,7 +131,7 @@ function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], 
              let dataTeste = new Date(proximaData.getTime());
              dataTeste.setDate(proximoDiaMes);
              if (dataTeste.getMonth() === proximaData.getMonth()) {
-                 proximaData.setDate(proximoDiaMes);
+                 proximaData.setDate(proximaData.getDate());
              } else {
                  proximaData.setMonth(proximaData.getMonth() + 1, diasMesNum[0]);
              }
@@ -144,15 +144,33 @@ function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], 
 }
 
 
+// Função auxiliar para tentar converter para ObjectId (se falhar, retorna null)
+function tryParseObjectId(idString) {
+    try {
+        return new ObjectId(idString);
+    } catch (e) {
+        return null;
+    }
+}
+
 // GET /alarmes/ativos
 app.get('/alarmes/ativos', autenticarToken, async (req, res) => {
     console.log(`[LOG /ativos] Tentando carregar. UserId (string) = ${req.userId}`);
     try {
         const statusAtivos = ["Ativo", 0];
+        const userIdAsObjectId = tryParseObjectId(req.userId);
+
+        // CORREÇÃO HÍBRIDA: Procura por UserId (String) OU UserId (ObjectId)
+        const query = {
+            $or: [
+                { UserId: req.userId }, // Procura pela String
+                { UserId: userIdAsObjectId } // Procura pelo ObjectId
+            ],
+            Status: { $in: statusAtivos }
+        };
 
         const alarmes = await db.collection('alarmes')
-            // CORREÇÃO: UserId é STRING
-            .find({ UserId: req.userId, Status: { $in: statusAtivos } })
+            .find(query)
             .sort({ Horario: 1 })
             .toArray();
         
@@ -169,13 +187,19 @@ app.get('/alarmes/historico', autenticarToken, async (req, res) => {
     console.log(`[LOG /historico] Tentando carregar. UserId (string) = ${req.userId}`);
     try {
         const statusDeHistorico = ["DisparadoVisto", 1, 2, 3];
+        const userIdAsObjectId = tryParseObjectId(req.userId);
+
+        // CORREÇÃO HÍBRIDA: Procura por UserId (String) OU UserId (ObjectId)
+        const query = {
+            $or: [
+                { UserId: req.userId }, // Procura pela String
+                { UserId: userIdAsObjectId } // Procura pelo ObjectId
+            ],
+            Status: { $in: statusDeHistorico }
+        };
 
         const alarmes = await db.collection('alarmes')
-            .find({ 
-                // CORREÇÃO: UserId é STRING
-                UserId: req.userId, 
-                Status: { $in: statusDeHistorico } 
-            })
+            .find(query)
             .sort({ Horario: -1 })
             .limit(100)
             .toArray();
@@ -192,11 +216,18 @@ app.get('/alarmes/historico', autenticarToken, async (req, res) => {
 app.delete('/alarmes/historico/limpar', autenticarToken, async (req, res) => {
     try {
         const statusDeHistorico = ["DisparadoVisto", 1, 2, 3];
-        await db.collection('alarmes').deleteMany({
-            // CORREÇÃO: UserId é STRING
-            UserId: req.userId,
+        const userIdAsObjectId = tryParseObjectId(req.userId);
+
+        // CORREÇÃO HÍBRIDA: Limpa para ambos os tipos
+        const query = {
+            $or: [
+                { UserId: req.userId },
+                { UserId: userIdAsObjectId }
+            ],
             Status: { $in: statusDeHistorico }
-        });
+        };
+        
+        await db.collection('alarmes').deleteMany(query);
         res.json({ success: true });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
@@ -206,28 +237,34 @@ app.get('/alarmes/proximos', autenticarToken, async (req, res) => {
     try {
         const agora = new Date();
         const statusAtivos = ["Ativo", 0];
-        const alarmes = await db.collection('alarmes')
-            .find({
-                // CORREÇÃO: UserId é STRING
-                UserId: req.userId,
-                Status: { $in: statusAtivos },
-                Horario: { $lte: agora } 
-            })
-            .toArray();
+        const userIdAsObjectId = tryParseObjectId(req.userId);
+
+        // CORREÇÃO HÍBRIDA: Procura por UserId (String) OU UserId (ObjectId)
+        const query = {
+            $or: [
+                { UserId: req.userId },
+                { UserId: userIdAsObjectId }
+            ],
+            Status: { $in: statusAtivos },
+            Horario: { $lte: agora } 
+        };
+
+        const alarmes = await db.collection('alarmes').find(query).toArray();
         res.json({ success: true, alarmes });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
 // Rota para "Tocar"
 app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
-    const { id } = req.params; // id é uma STRING da URL
-    const userId = req.userId; // userId é uma STRING do token
+    const { id } = req.params; 
+    const userId = req.userId;
+    const userIdAsObjectId = tryParseObjectId(userId);
 
     try {
-        // CORREÇÃO: _id É ObjectId, UserId É String
+        // CORREÇÃO HÍBRIDA: _id é ObjectId, UserId pode ser String OU ObjectId
         const alarme = await db.collection('alarmes').findOne({
             _id: new ObjectId(id),
-            UserId: userId
+            $or: [ { UserId: userId }, { UserId: userIdAsObjectId } ]
         });
 
         if (!alarme) return res.status(404).json({ message: "Alarme não encontrado" });
@@ -238,14 +275,21 @@ app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
                 alarme.TipoRecorrencia, alarme.DiasSemana, alarme.DiasMes
             );
             await db.collection('alarmes').updateOne(
-                { _id: new ObjectId(id) }, // CORREÇÃO: _id É ObjectId
-                { $set: { Horario: proximaData, Status: "Ativo", Mensagem: alarme.MensagemOriginal || alarme.Mensagem },
+                { _id: new ObjectId(id) }, 
+                { $set: { 
+                    Horario: proximaData, Status: "Ativo", 
+                    Mensagem: alarme.MensagemOriginal || alarme.Mensagem,
+                    UserId: new ObjectId(userId) // <-- FORÇA A CORREÇÃO
+                  },
                   $unset: { MensagemOriginal: "", HorarioBaseRecorrencia: "" } }
             );
         } else {
             await db.collection('alarmes').updateOne(
-                { _id: new ObjectId(id) }, // CORREÇÃO: _id É ObjectId
-                { $set: { Status: "DisparadoVisto" }, 
+                { _id: new ObjectId(id) }, 
+                { $set: { 
+                    Status: "DisparadoVisto",
+                    UserId: new ObjectId(userId) // <-- FORÇA A CORREÇÃO
+                  }, 
                   $unset: { MensagemOriginal: "", HorarioBaseRecorrencia: "" } }
             );
         }
@@ -257,12 +301,12 @@ app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
 app.post('/alarmes/visto/:id', autenticarToken, async (req, res) => {
     const { id } = req.params;
     const userId = req.userId;
+    const userIdAsObjectId = tryParseObjectId(userId);
     
     try {
-        // CORREÇÃO: _id É ObjectId, UserId É String
         const alarme = await db.collection('alarmes').findOne({
             _id: new ObjectId(id),
-            UserId: userId
+            $or: [ { UserId: userId }, { UserId: userIdAsObjectId } ]
         });
 
         if (!alarme) return res.status(404).json({ success: false, message: "Alarme não encontrado" });
@@ -273,14 +317,21 @@ app.post('/alarmes/visto/:id', autenticarToken, async (req, res) => {
                 alarme.TipoRecorrencia, alarme.DiasSemana, alarme.DiasMes
             );
             await db.collection('alarmes').updateOne(
-                { _id: new ObjectId(id) }, // CORREÇÃO: _id É ObjectId
-                { $set: { Horario: proximaData, Status: "Ativo", Mensagem: alarme.MensagemOriginal || alarme.Mensagem },
+                { _id: new ObjectId(id) }, 
+                { $set: { 
+                    Horario: proximaData, Status: "Ativo", 
+                    Mensagem: alarme.MensagemOriginal || alarme.Mensagem,
+                    UserId: new ObjectId(userId) // <-- FORÇA A CORREÇÃO
+                  },
                   $unset: { MensagemOriginal: "", HorarioBaseRecorrencia: "" } }
             );
         } else {
             await db.collection('alarmes').updateOne(
-                { _id: new ObjectId(id) }, // CORREÇÃO: _id É ObjectId
-                { $set: { Status: "DisparadoVisto" },
+                { _id: new ObjectId(id) }, 
+                { $set: { 
+                    Status: "DisparadoVisto",
+                    UserId: new ObjectId(userId) // <-- FORÇA A CORREÇÃO
+                  },
                   $unset: { MensagemOriginal: "", HorarioBaseRecorrencia: "" } }
             );
         }
@@ -293,12 +344,12 @@ app.post('/alarmes/adiar/:id', autenticarToken, async (req, res) => {
     const { id } = req.params;
     const userId = req.userId;
     const { minutos } = req.body;
+    const userIdAsObjectId = tryParseObjectId(userId);
 
     try {
-        // CORREÇÃO: _id É ObjectId, UserId É String
         const alarme = await db.collection('alarmes').findOne({
             _id: new ObjectId(id),
-            UserId: userId
+            $or: [ { UserId: userId }, { UserId: userIdAsObjectId } ]
         });
 
         if (!alarme) return res.status(404).json({ success: false, message: "Alarme não encontrado" });
@@ -309,12 +360,13 @@ app.post('/alarmes/adiar/:id', autenticarToken, async (req, res) => {
         const horarioBase = alarme.HorarioBaseRecorrencia || alarme.Horario;
 
         await db.collection('alarmes').updateOne(
-            { _id: new ObjectId(id) }, // CORREÇÃO: _id É ObjectId
+            { _id: new ObjectId(id) }, 
             { $set: { 
                 Horario: novoHorario, Status: "Ativo", 
                 Mensagem: `(Adiado ${minutos}min) ${msgBase}`, 
                 MensagemOriginal: msgBase,
-                HorarioBaseRecorrencia: new Date(horarioBase) 
+                HorarioBaseRecorrencia: new Date(horarioBase),
+                UserId: new ObjectId(userId) // <-- FORÇA A CORREÇÃO
             }}
         );
         res.json({ success: true });
@@ -346,11 +398,12 @@ app.get('/tasks/cleanup-old-history', async (req, res) => {
 
 // GET /alarmes/:id
 app.get('/alarmes/:id', autenticarToken, async (req, res) => {
+    const userId = req.userId;
+    const userIdAsObjectId = tryParseObjectId(userId);
     try {
-        // CORREÇÃO: _id É ObjectId, UserId É String
         const alarme = await db.collection('alarmes').findOne({
             _id: new ObjectId(req.params.id),
-            UserId: req.userId
+            $or: [ { UserId: userId }, { UserId: userIdAsObjectId } ]
         });
         if (!alarme) return res.status(404).json({ success: false, message: "Alarme não encontrado" });
         res.json({ success: true, alarme });
@@ -362,8 +415,12 @@ app.post('/alarmes', autenticarToken, async (req, res) => {
     try {
         const alarme = req.body;
         
-        // CORREÇÃO: UserId é STRING
-        alarme.UserId = req.userId;
+        // ==================================================================
+        // *** CORREÇÃO DE ESCRITA ***
+        // Força o UserId a ser salvo como ObjectId
+        alarme.UserId = new ObjectId(req.userId); 
+        // ==================================================================
+        
         alarme.Horario = new Date(alarme.Horario);
         alarme.Status = "Ativo"; 
 
@@ -376,7 +433,6 @@ app.post('/alarmes', autenticarToken, async (req, res) => {
             alarme.Horario.setHours(horarioBase.getHours(), horarioBase.getMinutes(), 0, 0);
         }
 
-        // Ao inserir, o MongoDB vai criar um _id (ObjectId) automaticamente.
         const result = await db.collection('alarmes').insertOne(alarme);
         res.status(201).json({ success: true, insertedId: result.insertedId });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
@@ -385,13 +441,21 @@ app.post('/alarmes', autenticarToken, async (req, res) => {
 // PUT /alarmes/:id (Atualizar)
 app.put('/alarmes/:id', autenticarToken, async (req, res) => {
     try {
-        const { id } = req.params; // id (string)
+        const { id } = req.params; 
         const alarmeUpdate = req.body;
+        const userId = req.userId;
+        const userIdAsObjectId = tryParseObjectId(userId);
 
         delete alarmeUpdate._id; 
         
         alarmeUpdate.Horario = new Date(alarmeUpdate.Horario);
         alarmeUpdate.Status = "Ativo"; 
+        
+        // ==================================================================
+        // *** CORREÇÃO DE ESCRITA ***
+        // Força o UserId a ser salvo como ObjectId
+        alarmeUpdate.UserId = new ObjectId(req.userId);
+        // ==================================================================
         
         delete alarmeUpdate.MensagemOriginal;
         delete alarmeUpdate.HorarioBaseRecorrencia;
@@ -406,8 +470,7 @@ app.put('/alarmes/:id', autenticarToken, async (req, res) => {
         }
 
         const result = await db.collection('alarmes').updateOne(
-            // CORREÇÃO: _id É ObjectId, UserId É String
-            { _id: new ObjectId(id), UserId: req.userId },
+            { _id: new ObjectId(id), $or: [ { UserId: userId }, { UserId: userIdAsObjectId } ] },
             { $set: alarmeUpdate,
               $unset: { MensagemOriginal: "", HorarioBaseRecorrencia: "" } }
         );
@@ -422,11 +485,13 @@ app.put('/alarmes/:id', autenticarToken, async (req, res) => {
 // DELETE /alarmes/:id
 app.delete('/alarmes/:id', autenticarToken, async (req, res) => {
     try {
-        const { id } = req.params; // id (string)
+        const { id } = req.params; 
+        const userId = req.userId;
+        const userIdAsObjectId = tryParseObjectId(userId);
+
         const result = await db.collection('alarmes').deleteOne({
-            // CORREÇÃO: _id É ObjectId, UserId É String
             _id: new ObjectId(id),
-            UserId: req.userId
+            $or: [ { UserId: userId }, { UserId: userIdAsObjectId } ]
         });
 
         if (result.deletedCount === 0) {
@@ -440,4 +505,3 @@ app.delete('/alarmes/:id', autenticarToken, async (req, res) => {
 app.listen(port, () => {
     console.log(`API RNLARME rodando na porta ${port}`);
 });
-
