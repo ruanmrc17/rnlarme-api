@@ -35,328 +35,333 @@ const autenticarToken = (req, res, next) => {
     if (token == null) return res.sendStatus(401); // Não autorizado
 
     jwt.verify(token, jwtSecret, (err, user) => {
-        if (err) return res.sendStatus(403); // Token inválido
-        req.userId = user.id; // Adiciona o ID do usuário ao 'req'
-        next(); // Continua para a rota
+        if (err) return res.sendStatus(403); // Token inválido ou expirado
+        req.userId = user.userId; // Adiciona o ID do usuário (do payload do token) à requisição
+        next();
     });
 };
 
-// --- Funções Auxiliares (Copiadas do seu main.js) ---
-async function verificarDisponibilidade(horario, userId, alarmeIdParaIgnorar = null) {
-    if (!db || !userId) return false;
-    const data = new Date(horario);
-    const rangeInicio = new Date(data); rangeInicio.setSeconds(0, 0);
-    const rangeFim = new Date(rangeInicio); rangeFim.setMinutes(rangeFim.getMinutes() + 1);
-    const query = {
-        UserId: new ObjectId(userId), Status: { $in: ["Ativo", 0] },
-        Horario: { $gte: rangeInicio, $lt: rangeFim }
-    };
-    if (alarmeIdParaIgnorar) {
-        query._id = { $ne: new ObjectId(alarmeIdParaIgnorar) };
-    }
-    const count = await db.collection('alarmes').countDocuments(query);
-    return (count < 3);
-}
-
-// ==================================================================
-// FUNÇÃO CORRIGIDA
-// ==================================================================
-function calcularProximaRecorrencia(alarme) {
-    let proximoHorario = new Date(alarme.Horario);
-    const agora = new Date(); // Pega a hora atual
-
-    const tipo = alarme.RecorrenciaTipo; 
-    const hora = proximoHorario.getHours();
-    const minuto = proximoHorario.getMinutes();
-    const segundo = proximoHorario.getSeconds();
-
-    // --- CORREÇÃO: Loop para garantir que a próxima data esteja no futuro ---
-    // Este loop vai rodar 1 ou 2 vezes no máximo em casos de "catch-up"
-    // (ex: alarme era 09:00, agora é 11:00, ele vai pular para o próximo dia válido)
-    while (proximoHorario <= agora) {
-        
-        let dataOriginal = new Date(proximoHorario); // Pega a data de base para o cálculo
-
-        if (tipo === "Semanal" || tipo === 0) {
-            const diasDaSemana = (alarme.DiasDaSemana || []).map(Number).filter(d => !isNaN(d)).sort((a, b) => a - b);
-            if (diasDaSemana.length === 0) {
-                 // Não é recorrente de verdade, só avança 1 dia e sai do loop
-                 proximoHorario.setDate(dataOriginal.getDate() + 1);
-                 break;
-            }
-            
-            let diaAtual = dataOriginal.getDay(); 
-            let proximoDia = diasDaSemana.find(dia => dia > diaAtual);
-            
-            if (proximoDia === undefined) {
-                // Passa para a próxima semana
-                let diasParaSomar = (7 - diaAtual) + diasDaSemana[0];
-                proximoHorario.setDate(dataOriginal.getDate() + diasParaSomar);
-            } else {
-                // Próximo dia na mesma semana
-                let diasParaSomar = proximoDia - diaAtual;
-                proximoHorario.setDate(dataOriginal.getDate() + diasParaSomar);
-            }
-        } else if (tipo === "Mensal") {
-            const diasDoMes = (alarme.DiasDoMes || []).map(Number).filter(d => !isNaN(d)).sort((a, b) => a - b);
-            if (diasDoMes.length === 0) {
-                proximoHorario.setDate(dataOriginal.getDate() + 1);
-                break;
-            }
-            
-            let diaAtual = dataOriginal.getDate();
-            let proximoDia = diasDoMes.find(dia => dia > diaAtual);
-            
-            if (proximoDia === undefined) {
-                proximoHorario.setMonth(dataOriginal.getMonth() + 1);
-                proximoHorario.setDate(diasDoMes[0]);
-            } else {
-                proximoHorario.setDate(proximoDia);
-            }
-        } else {
-             // Tipo desconhecido, sai do loop para evitar infinito
-             proximoHorario.setDate(dataOriginal.getDate() + 1);
-             break;
-        }
-        
-        // Define a hora/minuto na *nova* data
-        proximoHorario.setHours(hora, minuto, segundo, 0);
-    }
-    // --- FIM DA CORREÇÃO ---
-
-    return proximoHorario;
-}
-
-// --- ROTAS DA API ---
-
-// Rota de Teste
-app.get('/', (req, res) => {
-  res.send('API do RNLARME está no ar!');
-});
+// --- Rotas de Autenticação ---
 
 // Rota de Login
 app.post('/login', async (req, res) => {
-    const { username, password } = req.body;
     try {
+        const { username, password } = req.body;
+        
+        if (!username || !password) {
+            return res.status(400).json({ success: false, message: 'Usuário e senha são obrigatórios.' });
+        }
+
         const user = await db.collection('users').findOne({ Username: username.toLowerCase() });
         if (!user) {
-            return res.status(404).json({ success: false, message: "Usuário não encontrado" });
+            return res.status(401).json({ success: false, message: 'Usuário não encontrado.' });
         }
-        const match = await bcrypt.compare(password, user.PasswordHash);
+
+        const match = await bcrypt.compare(password, user.Password);
         if (match) {
-            const token = jwt.sign({ id: user._id }, jwtSecret, { expiresIn: '30d' });
+            // Senha correta, gerar token
+            const token = jwt.sign(
+                { userId: user._id.toString() }, // Salva o ID do usuário no token
+                jwtSecret,
+                { expiresIn: '30d' } // Token expira em 30 dias
+            );
             res.json({ success: true, token: token });
         } else {
-            res.status(401).json({ success: false, message: "Senha incorreta" });
+            // Senha incorreta
+            res.status(401).json({ success: false, message: 'Senha incorreta.' });
         }
     } catch (e) {
-        res.status(500).json({ success: false, message: e.message });
+        console.error("Erro no /login:", e);
+        res.status(500).json({ success: false, message: 'Erro interno do servidor.' });
     }
 });
 
-// ==================================================================
-// ROTA CORRIGIDA
-// ==================================================================
-app.post('/checar-alarmes', autenticarToken, async (req, res) => {
-    const userId = req.userId;
-    const agora = new Date();
-    const statusHistorico = ["DisparadoVisto", 1, 2, 3];
+// (Opcional: Rota para criar usuário, caso precise)
+// app.post('/register', async (req, res) => { ... });
+
+// --- Rotas da API de Alarmes ---
+
+// Função Auxiliar de Recorrência (Copiada do seu código original)
+function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], diasMes = []) {
+    let proximaData = new Date(baseHorario.getTime());
     
-    try {
-        const query = {
-            UserId: new ObjectId(userId),
-            Horario: { $lte: agora }, // Pega TODOS os alarmes no passado
-            $or: [
-                { Status: { $in: ["Ativo", 0] } }, // Ativos
-                // E recorrentes que já foram "vistos" mas precisam ser reagendados
-                { IsRecorrente: true, Status: { $in: statusHistorico } } 
-            ]
-        };
-        
-        const alarmesParaProcessar = await db.collection('alarmes').find(query).toArray();
-        let alarmesNotificaveis = [];
+    const diasSemanaNum = diasSemana.map(d => parseInt(d)).sort((a, b) => a - b); // [0 (Dom) ... 6 (Sab)]
+    const diasMesNum = diasMes.map(d => parseInt(d)).sort((a, b) => a - b); // [1 ... 31]
 
-        for (const alarme of alarmesParaProcessar) {
-            
-            if (alarme.IsRecorrente) {
-                // --- CORREÇÃO PARA RECORRENTES ---
-                
-                // 1. Sempre notificar, não importa o quão "atrasado"
-                alarmesNotificaveis.push({ ...alarme, _id: alarme._id.toString() });
-                
-                // 2. Calcular a PRÓXIMA data futura (usando a função corrigida)
-                const proximoHorario = calcularProximaRecorrencia(alarme);
-                
-                // 3. Atualizar o alarme no DB para a próxima data futura
-                await db.collection('alarmes').updateOne(
-                    { _id: alarme._id }, 
-                    { $set: { Horario: proximoHorario, Status: "Ativo" } }
-                );
-                
-            } else {
-                // --- LÓGICA ANTIGA PARA NÃO RECORRENTES ---
-                
-                // 1. Apenas notifica se for um "atraso" recente (app estava fechado < 60min)
-                const diffMinutos = (agora.getTime() - new Date(alarme.Horario).getTime()) / (1000 * 60);
-                if (diffMinutos < 60) {
-                    alarmesNotificaveis.push({ ...alarme, _id: alarme._id.toString() });
-                }
-                
-                // 2. Mover para o histórico (independente de notificar ou não)
-                await db.collection('alarmes').updateOne(
-                    { _id: alarme._id }, 
-                    { $set: { Status: "DisparadoVisto", DataHistorico: new Date() } }
-                );
-            }
+    const agora = new Date();
+    // Garante que o cálculo comece a partir de 'agora' se a base for no passado
+    // Isso evita loops infinitos se a base for muito antiga
+    if (proximaData <= agora) {
+        proximaData = agora;
+    }
+    
+    // Adiciona 1 segundo para garantir que não pegue a data/hora atual exata
+    proximaData.setSeconds(proximaData.getSeconds() + 1);
+
+    if (tipoRecorrencia === 'diariamente') {
+        proximaData.setDate(proximaData.getDate() + 1);
+        
+    } else if (tipoRecorrencia === 'semanalmente' && diasSemanaNum.length > 0) {
+        const hojeNum = proximaData.getDay(); // Dia da semana atual (0-6)
+        
+        // Encontra o próximo dia válido nesta semana
+        let proximoDiaSemana = diasSemanaNum.find(dia => dia > hojeNum);
+        
+        if (proximoDiaSemana !== undefined) {
+            // Se achou, avança os dias
+            proximaData.setDate(proximaData.getDate() + (proximoDiaSemana - hojeNum));
+        } else {
+            // Se não achou (ex: hoje é sexta, próximo é seg), pega o primeiro da próx. semana
+            // Avança para o primeiro dia (ex: segunda, dia 2)
+            // (7 - 5) + 2 = 4 dias
+            proximaData.setDate(proximaData.getDate() + (7 - hojeNum + diasSemanaNum[0]));
         }
+
+    } else if (tipoRecorrencia === 'mensalmente' && diasMesNum.length > 0) {
+        const hojeDia = proximaData.getDate(); // Dia do mês atual (1-31)
+
+        // Encontra o próximo dia válido neste mês
+        let proximoDiaMes = diasMesNum.find(dia => dia > hojeDia);
         
-        // Retorna apenas os alarmes que devem tocar AGORA
-        res.json({ success: true, alarmes: alarmesNotificaveis });
-        
+        if (proximoDiaMes !== undefined) {
+             // Tenta definir para o próximo dia válido neste mês
+            let dataTeste = new Date(proximaData.getTime());
+            dataTeste.setDate(proximoDiaMes);
+            
+            // Se o dia (ex: 31) não existir no mês atual (ex: Fev), o JS pula pro próx. mês
+            if (dataTeste.getMonth() === proximaData.getMonth()) {
+                proximaData.setDate(proximoDiaMes);
+            } else {
+                // Se pulou o mês (ex: 31 de Fev), pulamos para o próximo mês válido
+                // e pegamos o primeiro dia da lista
+                proximaData.setMonth(proximaData.getMonth() + 1, diasMesNum[0]);
+            }
+            
+        } else {
+            // Não há mais dias válidos este mês, vai pro próximo
+            // Pega o primeiro dia válido da lista (ex: dia 5)
+            proximaData.setMonth(proximaData.getMonth() + 1, diasMesNum[0]);
+        }
+    }
+    
+    // Define o horário base (ex: 8:55:00)
+    proximaData.setHours(baseHorario.getHours(), baseHorario.getMinutes(), baseHorario.getSeconds(), 0);
+    
+    return proximaData;
+}
+
+
+// GET /alarmes/ativos
+app.get('/alarmes/ativos', autenticarToken, async (req, res) => {
+    try {
+        const alarmes = await db.collection('alarmes')
+            .find({ userId: new ObjectId(req.userId), Status: "Ativo" })
+            .sort({ Horario: 1 })
+            .toArray();
+        res.json({ success: true, alarmes });
     } catch (e) {
         res.status(500).json({ success: false, message: e.message });
     }
 });
 
-
-// --- ROTAS CRUD (Create, Read, Update, Delete) ---
-// (Sem mudanças daqui para baixo)
-
-app.get('/alarmes/ativos', autenticarToken, async (req, res) => {
-    const alarmes = await db.collection('alarmes').find({ 
-        UserId: new ObjectId(req.userId), 
-        Status: { $in: ["Ativo", 0] }
-    }).sort({ Horario: 1 }).toArray();
-    res.json(alarmes.map(a => ({ ...a, _id: a._id.toString() })));
-});
-
+// GET /alarmes/historico
 app.get('/alarmes/historico', autenticarToken, async (req, res) => {
-    const statusHistorico = ["DisparadoVisto", 1, 2, 3];
-    const alarmes = await db.collection('alarmes').find({ 
-        UserId: new ObjectId(req.userId), 
-        Status: { $in: statusHistorico }
-    }).sort({ Horario: -1 }).toArray();
-    res.json(alarmes.map(a => ({ ...a, _id: a._id.toString() })));
+    try {
+        const alarmes = await db.collection('alarmes')
+            .find({ userId: new ObjectId(req.userId), Status: "DisparadoVisto" })
+            .sort({ Horario: -1 })
+            .limit(100)
+            .toArray();
+        res.json({ success: true, alarmes });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
 });
 
-app.get('/alarmes/:id', autenticarToken, async (req, res) => {
+// DELETE /alarmes/historico/limpar
+app.delete('/alarmes/historico/limpar', autenticarToken, async (req, res) => {
+    try {
+        await db.collection('alarmes').deleteMany({
+            userId: new ObjectId(req.userId),
+            Status: "DisparadoVisto"
+        });
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+});
+
+// GET /alarmes/proximos (Usado pelo Serviço de Alarme)
+app.get('/alarmes/proximos', autenticarToken, async (req, res) => {
+    try {
+        const agora = new Date();
+        const alarmes = await db.collection('alarmes')
+            .find({
+                userId: new ObjectId(req.userId),
+                Status: "Ativo",
+                Horario: { $lte: agora } // Pega alarmes com horário vencido
+            })
+            .toArray();
+        res.json({ success: true, alarmes });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+});
+
+// ***************************************************************
+// *** ROTAS CORRIGIDAS (BUGS 1 e 1.b) ***
+// ***************************************************************
+
+// Rota para "Tocar" (disparado pelo main.js)
+app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
+    const { id } = req.params;
+    const userId = req.userId;
+
     try {
         const alarme = await db.collection('alarmes').findOne({
-            _id: new ObjectId(req.params.id), 
-            UserId: new ObjectId(req.userId)
+            _id: new ObjectId(id),
+            userId: new ObjectId(userId)
         });
-        if (alarme) {
-            res.json({ ...alarme, _id: alarme._id.toString() });
+
+        if (!alarme) return res.status(404).json({ message: "Alarme não encontrado" });
+
+        if (alarme.IsRecorrente) {
+            
+            // CORREÇÃO: Use o 'HorarioBaseRecorrencia' se existir (alarme adiado),
+            // senão, use o 'Horario' normal (alarme tocando na hora certa).
+            const baseTimeParaCalculo = alarme.HorarioBaseRecorrencia || alarme.Horario;
+
+            const proximaData = calcularProximaExecucao(
+                new Date(baseTimeParaCalculo), // <-- USA O HORÁRIO BASE (ex: 8:55)
+                alarme.TipoRecorrencia,
+                alarme.DiasSemana,
+                alarme.DiasMes
+            );
+            
+            await db.collection('alarmes').updateOne(
+                { _id: new ObjectId(id) },
+                { 
+                    $set: { 
+                        Horario: proximaData, // Define o próximo horário de disparo (ex: 8:55 de amanhã)
+                        Status: "Ativo",
+                        Mensagem: alarme.MensagemOriginal || alarme.Mensagem // Restaura a msg original
+                    },
+                    $unset: {
+                        MensagemOriginal: "", // <-- Limpa o campo de "adiado"
+                        HorarioBaseRecorrencia: "" // <-- Limpa o campo de "adiado"
+                    }
+                }
+            );
         } else {
-            res.status(404).json({ message: "Alarme não encontrado" });
+            // Alarme não recorrente (também limpa os campos, por segurança)
+            await db.collection('alarmes').updateOne(
+                { _id: new ObjectId(id) },
+                { 
+                    $set: { Status: "DisparadoVisto" }, // Marca como "visto"
+                    $unset: {
+                        MensagemOriginal: "",
+                        HorarioBaseRecorrencia: ""
+                    }
+                }
+            );
         }
+        res.json({ success: true, alarmeDisparado: alarme });
     } catch (e) {
-        res.status(500).json({ message: e.message });
+        res.status(500).json({ success: false, message: e.message });
     }
 });
 
-app.post('/alarmes/create', autenticarToken, async (req, res) => {
-    const alarme = req.body;
-    const novoHorario = new Date(alarme.Horario);
+// Rota para "Visto" (clicado pelo usuário na notificação)
+app.post('/alarmes/visto/:id', autenticarToken, async (req, res) => {
+    const { id } = req.params;
+    const userId = req.userId;
     
-    if (novoHorario <= new Date()) {
-        return res.status(400).json({ success: false, message: "Data passada." });
-    }
-    const disponivel = await verificarDisponibilidade(novoHorario, req.userId);
-    if (!disponivel) {
-        return res.status(400).json({ success: false, message: "Já existem 3 alarmes neste minuto." });
-    }
     try {
-        const novoAlarme = {
-            Horario: novoHorario, Mensagem: alarme.Mensagem, IsRecorrente: alarme.IsRecorrente,
-            RecorrenciaTipo: alarme.IsRecorrente ? alarme.RecorrenciaTipo : null,
-            DiasDaSemana: alarme.IsRecorrente && (alarme.RecorrenciaTipo === 'Semanal' || alarme.RecorrenciaTipo === 0) ? alarme.DiasDaSemana : [],
-            DiasDoMes: alarme.IsRecorrente && alarme.RecorrenciaTipo === 'Mensal' ? alarme.DiasDoMes : [],
-            RecorrenciaInfo: alarme.RecorrenciaInfo || "",
-            UserId: new ObjectId(req.userId), Status: "Ativo",
-        };
-        await db.collection('alarmes').insertOne(novoAlarme);
-        res.json({ success: true });
-    } catch (e) {
-        res.status(500).json({ success: false, message: e.message });
-    }
-});
-
-app.put('/alarmes/:id', autenticarToken, async (req, res) => {
-    const alarme = req.body;
-    const novoHorario = new Date(alarme.Horario);
-    
-    if (novoHorario <= new Date()) {
-        return res.status(400).json({ success: false, message: "Data passada." });
-    }
-    const disponivel = await verificarDisponibilidade(novoHorario, req.userId, req.params.id);
-    if (!disponivel) {
-        return res.status(400).json({ success: false, message: "Já existem 3 alarmes neste minuto." });
-    }
-    try {
-        const updateData = {
-            Horario: novoHorario, Mensagem: alarme.Mensagem, IsRecorrente: alarme.IsRecorrente,
-            RecorrenciaTipo: alarme.IsRecorrente ? alarme.RecorrenciaTipo : null,
-            DiasDaSemana: alarme.IsRecorrente && (alarme.RecorrenciaTipo === 'Semanal' || alarme.RecorrenciaTipo === 0) ? alarme.DiasDaSemana : [],
-            DiasDoMes: alarme.IsRecorrente && alarme.RecorrenciaTipo === 'Mensal' ? alarme.DiasDoMes : [],
-            RecorrenciaInfo: alarme.RecorrenciaInfo || "", Status: "Ativo"
-        };
-        const updateOperation = { $set: updateData, $unset: { MensagemOriginal: "" } };
-        await db.collection('alarmes').updateOne(
-            { _id: new ObjectId(req.params.id), UserId: new ObjectId(req.userId) },
-            updateOperation 
-        );
-        res.json({ success: true });
-    } catch (e) {
-        res.status(500).json({ success: false, message: e.message });
-    }
-});
-
-app.delete('/alarmes/:id', autenticarToken, async (req, res) => {
-    try {
-        await db.collection('alarmes').deleteOne({ 
-            _id: new ObjectId(req.params.id),
-            UserId: new ObjectId(req.userId)
+        const alarme = await db.collection('alarmes').findOne({
+            _id: new ObjectId(id),
+            userId: new ObjectId(userId)
         });
+
+        if (!alarme) return res.status(404).json({ success: false, message: "Alarme não encontrado" });
+
+        if (alarme.IsRecorrente) {
+            
+            // CORREÇÃO: Lógica IDÊNTICA à rota /tocar
+            const baseTimeParaCalculo = alarme.HorarioBaseRecorrencia || alarme.Horario;
+
+            const proximaData = calcularProximaExecucao(
+                new Date(baseTimeParaCalculo), 
+                alarme.TipoRecorrencia,
+                alarme.DiasSemana,
+                alarme.DiasMes
+            );
+            
+            await db.collection('alarmes').updateOne(
+                { _id: new ObjectId(id) },
+                { 
+                    $set: { 
+                        Horario: proximaData, // Calcula o próximo disparo
+                        Status: "Ativo",
+                        Mensagem: alarme.MensagemOriginal || alarme.Mensagem
+                    },
+                    $unset: {
+                        MensagemOriginal: "",
+                        HorarioBaseRecorrencia: ""
+                    }
+                }
+            );
+        } else {
+            // Alarme não recorrente
+            await db.collection('alarmes').updateOne(
+                { _id: new ObjectId(id) },
+                { 
+                    $set: { Status: "DisparadoVisto" }, // Apenas marca como visto
+                    $unset: {
+                        MensagemOriginal: "",
+                        HorarioBaseRecorrencia: ""
+                    }
+                }
+            );
+        }
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ success: false, message: e.message });
     }
 });
 
-app.delete('/alarmes/historico/limpar', autenticarToken, async (req, res) => {
-    const statusHistorico = ["DisparadoVisto", 1, 2, 3];
-    try {
-        await db.collection('alarmes').deleteMany({ 
-            UserId: new ObjectId(req.userId),
-            Status: { $in: statusHistorico } 
-        });
-        res.json({ success: true });
-    } catch (e) {
-        res.status(500).json({ success: false, message: e.message });
-    }
-});
-
-app.post('/adiar/:id', autenticarToken, async (req, res) => {
+// Rota para "Adiar" (clicado pelo usuário)
+app.post('/alarmes/adiar/:id', autenticarToken, async (req, res) => {
+    const { id } = req.params;
+    const userId = req.userId;
     const { minutos } = req.body;
-    const novoHorario = new Date(); novoHorario.setMinutes(novoHorario.getMinutes() + minutos);
-    
-    const disponivel = await verificarDisponibilidade(novoHorario, req.userId);
-    if (!disponivel) {
-        return res.status(400).json({ success: false, message: "Já existem 3 alarmes nesse horário." });
-    }
-    
+
     try {
-        const alarmeObjId = new ObjectId(req.params.id);
-        const alarmeOriginal = await db.collection('alarmes').findOne({ _id: alarmeObjId });
-        if (!alarmeOriginal) throw new Error("Alarme não encontrado");
-        const msgBase = alarmeOriginal.MensagemOriginal || alarmeOriginal.Mensagem;
+        const alarme = await db.collection('alarmes').findOne({
+            _id: new ObjectId(id),
+            userId: new ObjectId(userId)
+        });
+
+        if (!alarme) return res.status(404).json({ success: false, message: "Alarme não encontrado" });
+
+        const agora = new Date();
+        const novoHorario = new Date(agora.getTime() + parseInt(minutos) * 60000);
         
+        // Lógica para salvar os dados originais (se for o primeiro "adiar")
+        const msgBase = alarme.MensagemOriginal || alarme.Mensagem;
+        
+        // CORREÇÃO: Se 'HorarioBaseRecorrencia' NÃO EXISTIR, salve o 'Horario' atual nele.
+        // Se já existe, preserve-o (para o caso de múltiplos "adiar").
+        const horarioBase = alarme.HorarioBaseRecorrencia || alarme.Horario;
+
         await db.collection('alarmes').updateOne(
-            { _id: alarmeObjId }, 
+            { _id: new ObjectId(id) },
             { $set: { 
-                Horario: novoHorario, Status: "Ativo", IsRecorrente: false, 
-                Mensagem: `(Adiado ${minutos}min) ${msgBase}`, MensagemOriginal: msgBase 
+                Horario: novoHorario, // Define o próximo disparo (adiado)
+                Status: "Ativo", 
+                // IsRecorrente: false,  <--- BUG ORIGINAL (REMOVIDO)
+                Mensagem: `(Adiado ${minutos}min) ${msgBase}`, 
+                MensagemOriginal: msgBase,
+                HorarioBaseRecorrencia: new Date(horarioBase) // <-- SALVA O HORÁRIO ORIGINAL
             }}
         );
         res.json({ success: true });
@@ -364,6 +369,11 @@ app.post('/adiar/:id', autenticarToken, async (req, res) => {
         res.status(500).json({ success: false, message: e.message });
     }
 });
+
+// ***************************************************************
+// *** FIM DAS ROTAS CORRIGIDAS ***
+// ***************************************************************
+
 
 // Rota de Limpeza (Cron Job)
 app.get('/tasks/cleanup-old-history', async (req, res) => {
@@ -376,7 +386,9 @@ app.get('/tasks/cleanup-old-history', async (req, res) => {
     try {
         const dataLimite = new Date();
         dataLimite.setDate(dataLimite.getDate() - 30);
-        const statusDeHistorico = ["DisparadoVisto", 1, 2, 3]; 
+        
+        // CORREÇÃO 3: Remove os números [1, 2, 3] que não são mais usados
+        const statusDeHistorico = ["DisparadoVisto"]; 
 
         const resultado = await db.collection('alarmes').deleteMany({
             Status: { $in: statusDeHistorico }, 
@@ -391,14 +403,123 @@ app.get('/tasks/cleanup-old-history', async (req, res) => {
         });
 
     } catch (e) {
-        console.error("[LIMPEZA CRON] Erro ao executar tarefa:", e);
-        res.status(500).json({ error: "Erro interno ao executar limpeza." });
+        console.error("[LIMPEZA CRON] Erro:", e);
+        res.status(500).json({ message: "Erro interno na limpeza." });
     }
 });
 
+// --- Rotas CRUD Padrão ---
 
+// GET /alarmes/:id
+app.get('/alarmes/:id', autenticarToken, async (req, res) => {
+    try {
+        const alarme = await db.collection('alarmes').findOne({
+            _id: new ObjectId(req.params.id),
+            userId: new ObjectId(req.userId)
+        });
+        if (!alarme) return res.status(404).json({ success: false, message: "Alarme não encontrado" });
+        res.json({ success: true, alarme });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+});
+
+// POST /alarmes (Criar)
+app.post('/alarmes', autenticarToken, async (req, res) => {
+    try {
+        const alarme = req.body;
+        
+        // Adiciona o ID do usuário e converte o horário
+        alarme.userId = new ObjectId(req.userId);
+        alarme.Horario = new Date(alarme.Horario);
+        
+        // Garante o Status
+        alarme.Status = "Ativo";
+
+        // Se for recorrente, calcula a primeira data de execução
+        if(alarme.IsRecorrente) {
+            const agora = new Date();
+            // Calcula a próxima data/hora a partir de 'agora'
+            // Isso garante que o alarme não seja criado "no passado"
+            alarme.Horario = calcularProximaExecucao(
+                agora, 
+                alarme.TipoRecorrencia, 
+                alarme.DiasSemana, 
+                alarme.DiasMes
+            );
+            
+            // Define o horário do dia (ex: 8:55)
+            const horarioBase = new Date(req.body.Horario); // Pega o horário original (ex: 8:55 de hoje)
+            alarme.Horario.setHours(horarioBase.getHours(), horarioBase.getMinutes(), 0, 0);
+        }
+
+        const result = await db.collection('alarmes').insertOne(alarme);
+        res.status(201).json({ success: true, insertedId: result.insertedId });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+});
+
+// PUT /alarmes/:id (Atualizar)
+app.put('/alarmes/:id', autenticarToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const alarmeUpdate = req.body;
+
+        // Remove o _id do corpo para evitar erros
+        delete alarmeUpdate._id; 
+        
+        // Converte o horário
+        alarmeUpdate.Horario = new Date(alarmeUpdate.Horario);
+        // Garante o Status
+        alarmeUpdate.Status = "Ativo";
+        
+        // Se for recorrente, recalcula a próxima data (similar à criação)
+        if(alarmeUpdate.IsRecorrente) {
+            const agora = new Date();
+            alarmeUpdate.Horario = calcularProximaExecucao(
+                agora, 
+                alarmeUpdate.TipoRecorrencia, 
+                alarmeUpdate.DiasSemana, 
+                alarmeUpdate.DiasMes
+            );
+            const horarioBase = new Date(req.body.Horario);
+            alarmeUpdate.Horario.setHours(horarioBase.getHours(), horarioBase.getMinutes(), 0, 0);
+        }
+
+        const result = await db.collection('alarmes').updateOne(
+            { _id: new ObjectId(id), userId: new ObjectId(req.userId) },
+            { $set: alarmeUpdate }
+        );
+        
+        if (result.matchedCount === 0) {
+            return res.status(404).json({ success: false, message: "Alarme não encontrado" });
+        }
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+});
+
+// DELETE /alarmes/:id
+app.delete('/alarmes/:id', autenticarToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await db.collection('alarmes').deleteOne({
+            _id: new ObjectId(id),
+            userId: new ObjectId(req.userId)
+        });
+
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ success: false, message: "Alarme não encontrado" });
+        }
+        res.status(204).send(); // 204 No Content
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+});
 
 // --- Iniciar Servidor ---
 app.listen(port, () => {
-  console.log(`API do RNLARME rodando em http://localhost:${port}`);
+    console.log(`API RNLARME rodando na porta ${port}`);
 });
