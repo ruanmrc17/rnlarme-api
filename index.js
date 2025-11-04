@@ -1,4 +1,4 @@
-// index.js (Servidor Backend COMPLETO E DEFINITIVO)
+// index.js (Servidor Backend COM LOGS DE DEBUG)
 require('dotenv').config();
 const express = require('express');
 const { MongoClient, ObjectId } = require('mongodb');
@@ -27,46 +27,43 @@ client.connect().then(() => {
     process.exit(1);
 });
 
-// ==================================================================
-// *** CORREÇÃO CRÍTICA DE AUTENTICAÇÃO ***
-// ==================================================================
 // --- Middleware de Autenticação ---
 const autenticarToken = (req, res, next) => {
+    // LOG (1): Verificando o header
+    console.log("[LOG Autenticar] Recebendo chamada para:", req.path);
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1]; 
     
-    if (token == null) return res.sendStatus(401); // Não autorizado
+    if (token == null) {
+        console.error("[LOG Autenticar] ERRO: Token não encontrado no header.");
+        return res.sendStatus(401); // Não autorizado
+    }
 
     jwt.verify(token, jwtSecret, (err, user) => {
         if (err) {
-            console.warn("Falha ao verificar token (inválido ou expirado):", err.message);
+            console.error("[LOG Autenticar] ERRO: Falha ao verificar token (inválido ou expirado).", err.message);
             return res.sendStatus(403); // Token inválido
         }
         
-        // *** INÍCIO DA CORREÇÃO DE COMPATIBILIDADE DE TOKEN ***
-        // Procura o ID no payload 'user.userId' (para tokens novos)
-        // OU no 'user.id' (para tokens antigos que ainda podem existir)
+        // LOG (2): Verificando o payload do token
         const userIdFromToken = user.userId || user.id;
 
         if (!userIdFromToken) {
-            // Se o token não tem nem .id nem .userId, é inválido
-            console.error("Token inválido, sem 'userId' ou 'id' no payload.");
+            console.error("[LOG Autenticar] ERRO CRÍTICO: Token verificado, mas não contém 'userId' ou 'id'. Payload:", user);
             return res.sendStatus(403); 
         }
 
-        // Adiciona o ID (encontrado) ao 'req'
+        // LOG (3): Sucesso!
+        console.log(`[LOG Autenticar] Token OK. UserId definido como: ${userIdFromToken}`);
         req.userId = userIdFromToken; 
-        // *** FIM DA CORREÇÃO ***
         
         next(); // Continua para a rota
     });
 };
-// ==================================================================
 
 
 // --- Rotas de Autenticação ---
 
-// Rota de Login (Corrigida para PasswordHash e novo payload de token)
 app.post('/login', async (req, res) => {
     try {
         const { username, password } = req.body;
@@ -80,7 +77,6 @@ app.post('/login', async (req, res) => {
             return res.status(401).json({ success: false, message: 'Usuário não encontrado.' });
         }
 
-        // CORREÇÃO: Usando o campo 'PasswordHash' do seu DB
         const storedHash = user.PasswordHash; 
 
         if (!storedHash) {
@@ -91,12 +87,13 @@ app.post('/login', async (req, res) => {
         const match = await bcrypt.compare(password, storedHash); 
         
         if (match) {
-            // CORREÇÃO: O payload é 'userId' (minúsculo) para novos tokens
+            // Cria token com 'userId'
             const token = jwt.sign(
                 { userId: user._id.toString() }, 
                 jwtSecret,
                 { expiresIn: '30d' } 
             );
+            console.log(`[LOG /login] Usuário '${username}' logado com sucesso.`);
             res.json({ success: true, token: token });
         } else {
             res.status(401).json({ success: false, message: 'Senha incorreta.' });
@@ -109,11 +106,10 @@ app.post('/login', async (req, res) => {
 
 // --- Rotas da API de Alarmes ---
 
-// Função Auxiliar de Recorrência (Corrigida para tipo '0')
+// (A função calcularProximaExecucao não foi alterada)
 function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], diasMes = []) {
     let proximaData = new Date(baseHorario.getTime());
     
-    // CORREÇÃO: O seu "arquivo antigo" mostra que tipo 0 = Semanal
     if (tipoRecorrencia === 0) {
         tipoRecorrencia = "Semanal";
     }
@@ -122,32 +118,28 @@ function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], 
     const diasMesNum = (diasMes || []).map(d => parseInt(d)).filter(d => !isNaN(d)).sort((a, b) => a - b); 
 
     const agora = new Date();
-    // Garante que o cálculo comece a partir de 'agora' se a base for no passado
     if (proximaData <= agora) {
         proximaData = agora;
     }
     
-    // Adiciona 1 segundo para garantir que não pegue a data/hora atual exata
     proximaData.setSeconds(proximaData.getSeconds() + 1);
 
     if (tipoRecorrencia === 'diariamente') {
         proximaData.setDate(proximaData.getDate() + 1);
         
     } else if (tipoRecorrencia === 'semanalmente' && diasSemanaNum.length > 0) {
-        const hojeNum = proximaData.getDay(); // Dia da semana atual (0-6)
+        const hojeNum = proximaData.getDay(); 
         
         let proximoDiaSemana = diasSemanaNum.find(dia => dia > hojeNum);
         
         if (proximoDiaSemana !== undefined) {
-            // Se achou, avança os dias
             proximaData.setDate(proximaData.getDate() + (proximoDiaSemana - hojeNum));
         } else {
-            // Se não achou (ex: hoje é sexta, próximo é seg), pega o primeiro da próx. semana
             proximaData.setDate(proximaData.getDate() + (7 - hojeNum + diasSemanaNum[0]));
         }
 
     } else if (tipoRecorrencia === 'mensalmente' && diasMesNum.length > 0) {
-        const hojeDia = proximaData.getDate(); // Dia do mês atual (1-31)
+        const hojeDia = proximaData.getDate(); 
 
         let proximoDiaMes = diasMesNum.find(dia => dia > hojeDia);
         
@@ -155,21 +147,17 @@ function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], 
              let dataTeste = new Date(proximaData.getTime());
              dataTeste.setDate(proximoDiaMes);
              
-             // Se o dia (ex: 31) não existir no mês atual (ex: Fev), o JS pula pro próx. mês
              if (dataTeste.getMonth() === proximaData.getMonth()) {
                  proximaData.setDate(proximoDiaMes);
              } else {
-                 // Se pulou o mês, pulamos para o próximo mês válido
                  proximaData.setMonth(proximaData.getMonth() + 1, diasMesNum[0]);
              }
             
         } else {
-            // Não há mais dias válidos este mês, vai pro próximo
             proximaData.setMonth(proximaData.getMonth() + 1, diasMesNum[0]);
         }
     }
     
-    // Define o horário base (ex: 8:55:00)
     proximaData.setHours(baseHorario.getHours(), baseHorario.getMinutes(), baseHorario.getSeconds(), 0);
     
     return proximaData;
@@ -178,27 +166,46 @@ function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], 
 
 // GET /alarmes/ativos
 app.get('/alarmes/ativos', autenticarToken, async (req, res) => {
+    // === INÍCIO DO LOG DE DEBUG ===
+    console.log(`[LOG /ativos] Tentando carregar alarmes ativos.`);
+    console.log(`[LOG /ativos] req.userId recebido do token: ${req.userId}`);
+    if (!req.userId) {
+        console.error("[LOG /ativos] ERRO CRÍTICO: req.userId está NULO ou INDEFINIDO. O middleware falhou em definir.");
+        // A autenticação já deve ter parado isso, mas é uma segurança extra
+        return res.status(500).json({ success: false, message: "UserID nulo após autenticação." });
+    }
+    // === FIM DO LOG DE DEBUG ===
+
     try {
-        // CORREÇÃO: Status "Ativo" (string) ou 0 (número)
         const statusAtivos = ["Ativo", 0];
 
         const alarmes = await db.collection('alarmes')
-            // CORREÇÃO: 'UserId' (maiúsculo)
             .find({ UserId: new ObjectId(req.userId), Status: { $in: statusAtivos } })
             .sort({ Horario: 1 })
             .toArray();
-        // A interface espera { success: true, alarmes: [...] }
+        
+        console.log(`[LOG /ativos] Sucesso. Encontrados ${alarmes.length} alarmes ativos para ${req.userId}.`);
         res.json({ success: true, alarmes });
     } catch (e) {
-        console.error("Erro em /alarmes/ativos:", e.message);
+        // Log de Erro Detalhado
+        console.error(`[LOG /ativos] ERRO no 'catch' da rota /alarmes/ativos para UserId: ${req.userId}`);
+        console.error(e); // Loga o objeto de erro completo
         res.status(500).json({ success: false, message: e.message });
     }
 });
 
 // GET /alarmes/historico
 app.get('/alarmes/historico', autenticarToken, async (req, res) => {
+    // === INÍCIO DO LOG DE DEBUG ===
+    console.log(`[LOG /historico] Tentando carregar histórico.`);
+    console.log(`[LOG /historico] req.userId recebido do token: ${req.userId}`);
+    if (!req.userId) {
+        console.error("[LOG /historico] ERRO CRÍTICO: req.userId está NULO ou INDEFINIDO. O middleware falhou em definir.");
+        return res.status(500).json({ success: false, message: "UserID nulo após autenticação." });
+    }
+    // === FIM DO LOG DE DEBUG ===
+
     try {
-        // CORREÇÃO: Status de Histórico (string + números)
         const statusDeHistorico = ["DisparadoVisto", 1, 2, 3];
 
         const alarmes = await db.collection('alarmes')
@@ -209,9 +216,13 @@ app.get('/alarmes/historico', autenticarToken, async (req, res) => {
             .sort({ Horario: -1 })
             .limit(100)
             .toArray();
+        
+        console.log(`[LOG /historico] Sucesso. Encontrados ${alarmes.length} itens no histórico para ${req.userId}.`);
         res.json({ success: true, alarmes });
     } catch (e) {
-        console.error("Erro em /alarmes/historico:", e.message);
+        // Log de Erro Detalhado
+        console.error(`[LOG /historico] ERRO no 'catch' da rota /alarmes/historico para UserId: ${req.userId}`);
+        console.error(e); // Loga o objeto de erro completo
         res.status(500).json({ success: false, message: e.message });
     }
 });
@@ -227,11 +238,12 @@ app.delete('/alarmes/historico/limpar', autenticarToken, async (req, res) => {
         });
         res.json({ success: true });
     } catch (e) {
+        console.error(`[LOG /historico/limpar] ERRO:`, e.message);
         res.status(500).json({ success: false, message: e.message });
     }
 });
 
-// GET /alarmes/proximos (Usado pelo Serviço de Alarme do Electron)
+// GET /alarmes/proximos
 app.get('/alarmes/proximos', autenticarToken, async (req, res) => {
     try {
         const agora = new Date();
@@ -246,12 +258,12 @@ app.get('/alarmes/proximos', autenticarToken, async (req, res) => {
             .toArray();
         res.json({ success: true, alarmes });
     } catch (e) {
-        console.error("Erro em /alarmes/proximos:", e.message);
+        console.error(`[LOG /proximos] ERRO:`, e.message);
         res.status(500).json({ success: false, message: e.message });
     }
 });
 
-// Rota para "Tocar" (disparado pelo main.js)
+// Rota para "Tocar"
 app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
     const { id } = req.params;
     const userId = req.userId;
@@ -264,7 +276,6 @@ app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
 
         if (!alarme) return res.status(404).json({ message: "Alarme não encontrado" });
 
-        // Ao tocar, nós "curamos" o alarme para o novo formato
         if (alarme.IsRecorrente) {
             
             const baseTimeParaCalculo = alarme.HorarioBaseRecorrencia || alarme.Horario;
@@ -281,7 +292,7 @@ app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
                 { 
                     $set: { 
                         Horario: proximaData, 
-                        Status: "Ativo", // Força o novo status
+                        Status: "Ativo", 
                         Mensagem: alarme.MensagemOriginal || alarme.Mensagem 
                     },
                     $unset: {
@@ -294,7 +305,7 @@ app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
             await db.collection('alarmes').updateOne(
                 { _id: new ObjectId(id) },
                 { 
-                    $set: { Status: "DisparadoVisto" }, // Força o novo status
+                    $set: { Status: "DisparadoVisto" }, 
                     $unset: {
                         MensagemOriginal: "",
                         HorarioBaseRecorrencia: ""
@@ -304,11 +315,12 @@ app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
         }
         res.json({ success: true, alarmeDisparado: alarme });
     } catch (e) {
+        console.error(`[LOG /tocar] ERRO:`, e.message);
         res.status(500).json({ success: false, message: e.message });
     }
 });
 
-// Rota para "Visto" (clicado pelo usuário na notificação)
+// Rota para "Visto"
 app.post('/alarmes/visto/:id', autenticarToken, async (req, res) => {
     const { id } = req.params;
     const userId = req.userId;
@@ -337,7 +349,7 @@ app.post('/alarmes/visto/:id', autenticarToken, async (req, res) => {
                 { 
                     $set: { 
                         Horario: proximaData, 
-                        Status: "Ativo", // Força o novo status
+                        Status: "Ativo", 
                         Mensagem: alarme.MensagemOriginal || alarme.Mensagem
                     },
                     $unset: {
@@ -350,7 +362,7 @@ app.post('/alarmes/visto/:id', autenticarToken, async (req, res) => {
             await db.collection('alarmes').updateOne(
                 { _id: new ObjectId(id) },
                 { 
-                    $set: { Status: "DisparadoVisto" }, // Força o novo status
+                    $set: { Status: "DisparadoVisto" }, 
                     $unset: {
                         MensagemOriginal: "",
                         HorarioBaseRecorrencia: ""
@@ -360,11 +372,12 @@ app.post('/alarmes/visto/:id', autenticarToken, async (req, res) => {
         }
         res.json({ success: true });
     } catch (e) {
+        console.error(`[LOG /visto] ERRO:`, e.message);
         res.status(500).json({ success: false, message: e.message });
     }
 });
 
-// Rota para "Adiar" (clicado pelo usuário)
+// Rota para "Adiar"
 app.post('/alarmes/adiar/:id', autenticarToken, async (req, res) => {
     const { id } = req.params;
     const userId = req.userId;
@@ -388,7 +401,7 @@ app.post('/alarmes/adiar/:id', autenticarToken, async (req, res) => {
             { _id: new ObjectId(id) },
             { $set: { 
                 Horario: novoHorario, 
-                Status: "Ativo", // Força o novo status
+                Status: "Ativo", 
                 Mensagem: `(Adiado ${minutos}min) ${msgBase}`, 
                 MensagemOriginal: msgBase,
                 HorarioBaseRecorrencia: new Date(horarioBase) 
@@ -396,6 +409,7 @@ app.post('/alarmes/adiar/:id', autenticarToken, async (req, res) => {
         );
         res.json({ success: true });
     } catch (e) {
+        console.error(`[LOG /adiar] ERRO:`, e.message);
         res.status(500).json({ success: false, message: e.message });
     }
 });
@@ -445,6 +459,7 @@ app.get('/alarmes/:id', autenticarToken, async (req, res) => {
         if (!alarme) return res.status(404).json({ success: false, message: "Alarme não encontrado" });
         res.json({ success: true, alarme });
     } catch (e) {
+        console.error(`[LOG /alarmes/:id] ERRO:`, e.message);
         res.status(500).json({ success: false, message: e.message });
     }
 });
@@ -456,7 +471,7 @@ app.post('/alarmes', autenticarToken, async (req, res) => {
         
         alarme.UserId = new ObjectId(req.userId);
         alarme.Horario = new Date(alarme.Horario);
-        alarme.Status = "Ativo"; // Garante o Status novo
+        alarme.Status = "Ativo"; 
 
         if(alarme.IsRecorrente) {
             const agora = new Date();
@@ -474,6 +489,7 @@ app.post('/alarmes', autenticarToken, async (req, res) => {
         const result = await db.collection('alarmes').insertOne(alarme);
         res.status(201).json({ success: true, insertedId: result.insertedId });
     } catch (e) {
+        console.error(`[LOG /alarmes (POST)] ERRO:`, e.message);
         res.status(500).json({ success: false, message: e.message });
     }
 });
@@ -487,9 +503,8 @@ app.put('/alarmes/:id', autenticarToken, async (req, res) => {
         delete alarmeUpdate._id; 
         
         alarmeUpdate.Horario = new Date(alarmeUpdate.Horario);
-        alarmeUpdate.Status = "Ativo"; // Garante o Status novo
+        alarmeUpdate.Status = "Ativo"; 
         
-        // Remove campos antigos (se for um alarme adiado sendo salvo)
         delete alarmeUpdate.MensagemOriginal;
         delete alarmeUpdate.HorarioBaseRecorrencia;
 
@@ -509,7 +524,6 @@ app.put('/alarmes/:id', autenticarToken, async (req, res) => {
             { _id: new ObjectId(id), UserId: new ObjectId(req.userId) },
             { 
                 $set: alarmeUpdate,
-                // Garante que campos de "adiado" sejam limpos ao salvar
                 $unset: { 
                     MensagemOriginal: "",
                     HorarioBaseRecorrencia: ""
@@ -522,6 +536,7 @@ app.put('/alarmes/:id', autenticarToken, async (req, res) => {
         }
         res.json({ success: true });
     } catch (e) {
+        console.error(`[LOG /alarmes/:id (PUT)] ERRO:`, e.message);
         res.status(500).json({ success: false, message: e.message });
     }
 });
@@ -540,6 +555,7 @@ app.delete('/alarmes/:id', autenticarToken, async (req, res) => {
         }
         res.status(204).send(); // 204 No Content
     } catch (e) {
+        console.error(`[LOG /alarmes/:id (DELETE)] ERRO:`, e.message);
         res.status(500).json({ success: false, message: e.message });
     }
 });
@@ -548,3 +564,5 @@ app.delete('/alarmes/:id', autenticarToken, async (req, res) => {
 app.listen(port, () => {
     console.log(`API RNLARME rodando na porta ${port}`);
 });
+```
+
