@@ -58,7 +58,7 @@ app.post('/login', async (req, res) => {
         }
 
         // CORREÇÃO: use 'user.password' (minúsculo)
-        const match = await bcrypt.compare(password, user.password);
+        const match = await bcrypt.compare(password, user.Password);
         if (match) {
             // Senha correta, gerar token
             const token = jwt.sign(
