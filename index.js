@@ -57,7 +57,8 @@ app.post('/login', async (req, res) => {
             return res.status(401).json({ success: false, message: 'Usuário não encontrado.' });
         }
 
-        const match = await bcrypt.compare(password, user.Password);
+        // CORREÇÃO: use 'user.password' (minúsculo)
+        const match = await bcrypt.compare(password, user.password);
         if (match) {
             // Senha correta, gerar token
             const token = jwt.sign(
