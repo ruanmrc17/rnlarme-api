@@ -564,5 +564,3 @@ app.delete('/alarmes/:id', autenticarToken, async (req, res) => {
 app.listen(port, () => {
     console.log(`API RNLARME rodando na porta ${port}`);
 });
-```
-
