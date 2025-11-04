@@ -1,4 +1,4 @@
-// index.js (Servidor Backend COMPLETO E CORRIGIDO)
+// index.js (Servidor Backend COMPLETO E DEFINITIVO)
 require('dotenv').config();
 const express = require('express');
 const { MongoClient, ObjectId } = require('mongodb');
@@ -27,6 +27,9 @@ client.connect().then(() => {
     process.exit(1);
 });
 
+// ==================================================================
+// *** CORREÇÃO CRÍTICA DE AUTENTICAÇÃO ***
+// ==================================================================
 // --- Middleware de Autenticação ---
 const autenticarToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -35,12 +38,12 @@ const autenticarToken = (req, res, next) => {
     if (token == null) return res.sendStatus(401); // Não autorizado
 
     jwt.verify(token, jwtSecret, (err, user) => {
-        if (err) return res.sendStatus(403); // Token inválido
+        if (err) {
+            console.warn("Falha ao verificar token (inválido ou expirado):", err.message);
+            return res.sendStatus(403); // Token inválido
+        }
         
-        // ==================================================================
-        // *** INÍCIO DA CORREÇÃO FINAL ***
-        // ==================================================================
-        
+        // *** INÍCIO DA CORREÇÃO DE COMPATIBILIDADE DE TOKEN ***
         // Procura o ID no payload 'user.userId' (para tokens novos)
         // OU no 'user.id' (para tokens antigos que ainda podem existir)
         const userIdFromToken = user.userId || user.id;
@@ -53,18 +56,17 @@ const autenticarToken = (req, res, next) => {
 
         // Adiciona o ID (encontrado) ao 'req'
         req.userId = userIdFromToken; 
-        
-        // ==================================================================
-        // *** FIM DA CORREÇÃO FINAL ***
-        // ==================================================================
+        // *** FIM DA CORREÇÃO ***
         
         next(); // Continua para a rota
     });
 };
+// ==================================================================
+
 
 // --- Rotas de Autenticação ---
 
-// Rota de Login (Corrigida para PasswordHash)
+// Rota de Login (Corrigida para PasswordHash e novo payload de token)
 app.post('/login', async (req, res) => {
     try {
         const { username, password } = req.body;
@@ -89,7 +91,7 @@ app.post('/login', async (req, res) => {
         const match = await bcrypt.compare(password, storedHash); 
         
         if (match) {
-            // CORREÇÃO: O payload é 'userId' (minúsculo)
+            // CORREÇÃO: O payload é 'userId' (minúsculo) para novos tokens
             const token = jwt.sign(
                 { userId: user._id.toString() }, 
                 jwtSecret,
@@ -107,7 +109,7 @@ app.post('/login', async (req, res) => {
 
 // --- Rotas da API de Alarmes ---
 
-// Função Auxiliar de Recorrência (Copiada do seu primeiro arquivo)
+// Função Auxiliar de Recorrência (Corrigida para tipo '0')
 function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], diasMes = []) {
     let proximaData = new Date(baseHorario.getTime());
     
@@ -120,28 +122,32 @@ function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], 
     const diasMesNum = (diasMes || []).map(d => parseInt(d)).filter(d => !isNaN(d)).sort((a, b) => a - b); 
 
     const agora = new Date();
+    // Garante que o cálculo comece a partir de 'agora' se a base for no passado
     if (proximaData <= agora) {
         proximaData = agora;
     }
     
+    // Adiciona 1 segundo para garantir que não pegue a data/hora atual exata
     proximaData.setSeconds(proximaData.getSeconds() + 1);
 
     if (tipoRecorrencia === 'diariamente') {
         proximaData.setDate(proximaData.getDate() + 1);
         
     } else if (tipoRecorrencia === 'semanalmente' && diasSemanaNum.length > 0) {
-        const hojeNum = proximaData.getDay(); 
+        const hojeNum = proximaData.getDay(); // Dia da semana atual (0-6)
         
         let proximoDiaSemana = diasSemanaNum.find(dia => dia > hojeNum);
         
         if (proximoDiaSemana !== undefined) {
+            // Se achou, avança os dias
             proximaData.setDate(proximaData.getDate() + (proximoDiaSemana - hojeNum));
         } else {
+            // Se não achou (ex: hoje é sexta, próximo é seg), pega o primeiro da próx. semana
             proximaData.setDate(proximaData.getDate() + (7 - hojeNum + diasSemanaNum[0]));
         }
 
     } else if (tipoRecorrencia === 'mensalmente' && diasMesNum.length > 0) {
-        const hojeDia = proximaData.getDate(); 
+        const hojeDia = proximaData.getDate(); // Dia do mês atual (1-31)
 
         let proximoDiaMes = diasMesNum.find(dia => dia > hojeDia);
         
@@ -149,17 +155,21 @@ function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], 
              let dataTeste = new Date(proximaData.getTime());
              dataTeste.setDate(proximoDiaMes);
              
+             // Se o dia (ex: 31) não existir no mês atual (ex: Fev), o JS pula pro próx. mês
              if (dataTeste.getMonth() === proximaData.getMonth()) {
                  proximaData.setDate(proximoDiaMes);
              } else {
+                 // Se pulou o mês, pulamos para o próximo mês válido
                  proximaData.setMonth(proximaData.getMonth() + 1, diasMesNum[0]);
              }
             
         } else {
+            // Não há mais dias válidos este mês, vai pro próximo
             proximaData.setMonth(proximaData.getMonth() + 1, diasMesNum[0]);
         }
     }
     
+    // Define o horário base (ex: 8:55:00)
     proximaData.setHours(baseHorario.getHours(), baseHorario.getMinutes(), baseHorario.getSeconds(), 0);
     
     return proximaData;
@@ -169,7 +179,7 @@ function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], 
 // GET /alarmes/ativos
 app.get('/alarmes/ativos', autenticarToken, async (req, res) => {
     try {
-        // CORREÇÃO FINAL: Status "Ativo" (string) ou 0 (número)
+        // CORREÇÃO: Status "Ativo" (string) ou 0 (número)
         const statusAtivos = ["Ativo", 0];
 
         const alarmes = await db.collection('alarmes')
@@ -177,8 +187,10 @@ app.get('/alarmes/ativos', autenticarToken, async (req, res) => {
             .find({ UserId: new ObjectId(req.userId), Status: { $in: statusAtivos } })
             .sort({ Horario: 1 })
             .toArray();
+        // A interface espera { success: true, alarmes: [...] }
         res.json({ success: true, alarmes });
     } catch (e) {
+        console.error("Erro em /alarmes/ativos:", e.message);
         res.status(500).json({ success: false, message: e.message });
     }
 });
@@ -199,6 +211,7 @@ app.get('/alarmes/historico', autenticarToken, async (req, res) => {
             .toArray();
         res.json({ success: true, alarmes });
     } catch (e) {
+        console.error("Erro em /alarmes/historico:", e.message);
         res.status(500).json({ success: false, message: e.message });
     }
 });
@@ -222,7 +235,6 @@ app.delete('/alarmes/historico/limpar', autenticarToken, async (req, res) => {
 app.get('/alarmes/proximos', autenticarToken, async (req, res) => {
     try {
         const agora = new Date();
-        // CORREÇÃO FINAL: Status "Ativo" (string) ou 0 (número)
         const statusAtivos = ["Ativo", 0];
 
         const alarmes = await db.collection('alarmes')
@@ -234,6 +246,7 @@ app.get('/alarmes/proximos', autenticarToken, async (req, res) => {
             .toArray();
         res.json({ success: true, alarmes });
     } catch (e) {
+        console.error("Erro em /alarmes/proximos:", e.message);
         res.status(500).json({ success: false, message: e.message });
     }
 });
@@ -256,7 +269,6 @@ app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
             
             const baseTimeParaCalculo = alarme.HorarioBaseRecorrencia || alarme.Horario;
             
-            // Passa o Tipo de Recorrência (que pode ser 'Semanal' ou '0')
             const proximaData = calcularProximaExecucao(
                 new Date(baseTimeParaCalculo), 
                 alarme.TipoRecorrencia, 
@@ -309,14 +321,13 @@ app.post('/alarmes/visto/:id', autenticarToken, async (req, res) => {
 
         if (!alarme) return res.status(404).json({ success: false, message: "Alarme não encontrado" });
 
-        // Idêntico ao /tocar
         if (alarme.IsRecorrente) {
             
             const baseTimeParaCalculo = alarme.HorarioBaseRecorrencia || alarme.Horario;
 
             const proximaData = calcularProximaExecucao(
                 new Date(baseTimeParaCalculo), 
-                alarme.TipoRecorrencia, // Passa o Tipo (ex: 0)
+                alarme.TipoRecorrencia, 
                 alarme.DiasSemana,
                 alarme.DiasMes
             );
@@ -443,12 +454,9 @@ app.post('/alarmes', autenticarToken, async (req, res) => {
     try {
         const alarme = req.body;
         
-        // Garante o UserId (maiúsculo)
         alarme.UserId = new ObjectId(req.userId);
         alarme.Horario = new Date(alarme.Horario);
-        
-        // Garante o Status novo
-        alarme.Status = "Ativo";
+        alarme.Status = "Ativo"; // Garante o Status novo
 
         if(alarme.IsRecorrente) {
             const agora = new Date();
@@ -481,6 +489,10 @@ app.put('/alarmes/:id', autenticarToken, async (req, res) => {
         alarmeUpdate.Horario = new Date(alarmeUpdate.Horario);
         alarmeUpdate.Status = "Ativo"; // Garante o Status novo
         
+        // Remove campos antigos (se for um alarme adiado sendo salvo)
+        delete alarmeUpdate.MensagemOriginal;
+        delete alarmeUpdate.HorarioBaseRecorrencia;
+
         if(alarmeUpdate.IsRecorrente) {
             const agora = new Date();
             alarmeUpdate.Horario = calcularProximaExecucao(
@@ -495,7 +507,14 @@ app.put('/alarmes/:id', autenticarToken, async (req, res) => {
 
         const result = await db.collection('alarmes').updateOne(
             { _id: new ObjectId(id), UserId: new ObjectId(req.userId) },
-            { $set: alarmeUpdate }
+            { 
+                $set: alarmeUpdate,
+                // Garante que campos de "adiado" sejam limpos ao salvar
+                $unset: { 
+                    MensagemOriginal: "",
+                    HorarioBaseRecorrencia: ""
+                }
+            }
         );
         
         if (result.matchedCount === 0) {
