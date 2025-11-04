@@ -1,4 +1,4 @@
-// index.js (Seu novo servidor backend)
+// index.js (Servidor Backend COMPLETO E CORRIGIDO)
 require('dotenv').config();
 const express = require('express');
 const { MongoClient, ObjectId } = require('mongodb');
@@ -36,14 +36,15 @@ const autenticarToken = (req, res, next) => {
 
     jwt.verify(token, jwtSecret, (err, user) => {
         if (err) return res.sendStatus(403); 
-        req.userId = user.userId; // <- 'req.userId' (minúsculo) está CORRETO aqui
+        // Usa o 'userId' que definimos no payload do token
+        req.userId = user.userId; 
         next();
     });
 };
 
 // --- Rotas de Autenticação ---
 
-// Rota de Login (CORRIGIDA para PasswordHash)
+// Rota de Login (Corrigida para PasswordHash)
 app.post('/login', async (req, res) => {
     try {
         const { username, password } = req.body;
@@ -68,6 +69,7 @@ app.post('/login', async (req, res) => {
         const match = await bcrypt.compare(password, storedHash); 
         
         if (match) {
+            // CORREÇÃO: O payload é 'userId' (minúsculo)
             const token = jwt.sign(
                 { userId: user._id.toString() }, 
                 jwtSecret,
@@ -85,12 +87,17 @@ app.post('/login', async (req, res) => {
 
 // --- Rotas da API de Alarmes ---
 
-// Função Auxiliar de Recorrência (Sem alterações)
+// Função Auxiliar de Recorrência (Copiada do seu primeiro arquivo)
 function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], diasMes = []) {
     let proximaData = new Date(baseHorario.getTime());
     
-    const diasSemanaNum = diasSemana.map(d => parseInt(d)).sort((a, b) => a - b); // [0 (Dom) ... 6 (Sab)]
-    const diasMesNum = diasMes.map(d => parseInt(d)).sort((a, b) => a - b); // [1 ... 31]
+    // CORREÇÃO: O seu "arquivo antigo" mostra que tipo 0 = Semanal
+    if (tipoRecorrencia === 0) {
+        tipoRecorrencia = "Semanal";
+    }
+
+    const diasSemanaNum = (diasSemana || []).map(d => parseInt(d)).filter(d => !isNaN(d)).sort((a, b) => a - b); 
+    const diasMesNum = (diasMes || []).map(d => parseInt(d)).filter(d => !isNaN(d)).sort((a, b) => a - b); 
 
     const agora = new Date();
     if (proximaData <= agora) {
@@ -142,9 +149,12 @@ function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], 
 // GET /alarmes/ativos
 app.get('/alarmes/ativos', autenticarToken, async (req, res) => {
     try {
+        // CORREÇÃO FINAL: Status "Ativo" (string) ou 0 (número)
+        const statusAtivos = ["Ativo", 0];
+
         const alarmes = await db.collection('alarmes')
-            // CORREÇÃO 1: 'userId' (minúsculo) -> 'UserId' (maiúsculo)
-            .find({ UserId: new ObjectId(req.userId), Status: "Ativo" })
+            // CORREÇÃO: 'UserId' (maiúsculo)
+            .find({ UserId: new ObjectId(req.userId), Status: { $in: statusAtivos } })
             .sort({ Horario: 1 })
             .toArray();
         res.json({ success: true, alarmes });
@@ -156,8 +166,7 @@ app.get('/alarmes/ativos', autenticarToken, async (req, res) => {
 // GET /alarmes/historico
 app.get('/alarmes/historico', autenticarToken, async (req, res) => {
     try {
-        // CORREÇÃO 2: 'userId' -> 'UserId'
-        // CORREÇÃO 3: Status inclui os números antigos [1, 2, 3]
+        // CORREÇÃO: Status de Histórico (string + números)
         const statusDeHistorico = ["DisparadoVisto", 1, 2, 3];
 
         const alarmes = await db.collection('alarmes')
@@ -177,11 +186,9 @@ app.get('/alarmes/historico', autenticarToken, async (req, res) => {
 // DELETE /alarmes/historico/limpar
 app.delete('/alarmes/historico/limpar', autenticarToken, async (req, res) => {
     try {
-        // CORREÇÃO 4: Status inclui os números antigos [1, 2, 3]
         const statusDeHistorico = ["DisparadoVisto", 1, 2, 3];
 
         await db.collection('alarmes').deleteMany({
-            // CORREÇÃO 5: 'userId' -> 'UserId'
             UserId: new ObjectId(req.userId),
             Status: { $in: statusDeHistorico }
         });
@@ -191,15 +198,17 @@ app.delete('/alarmes/historico/limpar', autenticarToken, async (req, res) => {
     }
 });
 
-// GET /alarmes/proximos (Usado pelo Serviço de Alarme)
+// GET /alarmes/proximos (Usado pelo Serviço de Alarme do Electron)
 app.get('/alarmes/proximos', autenticarToken, async (req, res) => {
     try {
         const agora = new Date();
+        // CORREÇÃO FINAL: Status "Ativo" (string) ou 0 (número)
+        const statusAtivos = ["Ativo", 0];
+
         const alarmes = await db.collection('alarmes')
             .find({
-                // CORREÇÃO 6: 'userId' -> 'UserId'
                 UserId: new ObjectId(req.userId),
-                Status: "Ativo",
+                Status: { $in: statusAtivos },
                 Horario: { $lte: agora } 
             })
             .toArray();
@@ -217,19 +226,20 @@ app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
     try {
         const alarme = await db.collection('alarmes').findOne({
             _id: new ObjectId(id),
-            // CORREÇÃO 7: 'userId' -> 'UserId'
             UserId: new ObjectId(userId)
         });
 
         if (!alarme) return res.status(404).json({ message: "Alarme não encontrado" });
 
+        // Ao tocar, nós "curamos" o alarme para o novo formato
         if (alarme.IsRecorrente) {
             
             const baseTimeParaCalculo = alarme.HorarioBaseRecorrencia || alarme.Horario;
-
+            
+            // Passa o Tipo de Recorrência (que pode ser 'Semanal' ou '0')
             const proximaData = calcularProximaExecucao(
                 new Date(baseTimeParaCalculo), 
-                alarme.TipoRecorrencia,
+                alarme.TipoRecorrencia, 
                 alarme.DiasSemana,
                 alarme.DiasMes
             );
@@ -239,7 +249,7 @@ app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
                 { 
                     $set: { 
                         Horario: proximaData, 
-                        Status: "Ativo",
+                        Status: "Ativo", // Força o novo status
                         Mensagem: alarme.MensagemOriginal || alarme.Mensagem 
                     },
                     $unset: {
@@ -252,7 +262,7 @@ app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
             await db.collection('alarmes').updateOne(
                 { _id: new ObjectId(id) },
                 { 
-                    $set: { Status: "DisparadoVisto" }, // Marca como "visto"
+                    $set: { Status: "DisparadoVisto" }, // Força o novo status
                     $unset: {
                         MensagemOriginal: "",
                         HorarioBaseRecorrencia: ""
@@ -274,19 +284,19 @@ app.post('/alarmes/visto/:id', autenticarToken, async (req, res) => {
     try {
         const alarme = await db.collection('alarmes').findOne({
             _id: new ObjectId(id),
-            // CORREÇÃO 8: 'userId' -> 'UserId'
             UserId: new ObjectId(userId)
         });
 
         if (!alarme) return res.status(404).json({ success: false, message: "Alarme não encontrado" });
 
+        // Idêntico ao /tocar
         if (alarme.IsRecorrente) {
             
             const baseTimeParaCalculo = alarme.HorarioBaseRecorrencia || alarme.Horario;
 
             const proximaData = calcularProximaExecucao(
                 new Date(baseTimeParaCalculo), 
-                alarme.TipoRecorrencia,
+                alarme.TipoRecorrencia, // Passa o Tipo (ex: 0)
                 alarme.DiasSemana,
                 alarme.DiasMes
             );
@@ -296,7 +306,7 @@ app.post('/alarmes/visto/:id', autenticarToken, async (req, res) => {
                 { 
                     $set: { 
                         Horario: proximaData, 
-                        Status: "Ativo",
+                        Status: "Ativo", // Força o novo status
                         Mensagem: alarme.MensagemOriginal || alarme.Mensagem
                     },
                     $unset: {
@@ -309,7 +319,7 @@ app.post('/alarmes/visto/:id', autenticarToken, async (req, res) => {
             await db.collection('alarmes').updateOne(
                 { _id: new ObjectId(id) },
                 { 
-                    $set: { Status: "DisparadoVisto" }, 
+                    $set: { Status: "DisparadoVisto" }, // Força o novo status
                     $unset: {
                         MensagemOriginal: "",
                         HorarioBaseRecorrencia: ""
@@ -332,7 +342,6 @@ app.post('/alarmes/adiar/:id', autenticarToken, async (req, res) => {
     try {
         const alarme = await db.collection('alarmes').findOne({
             _id: new ObjectId(id),
-            // CORREÇÃO 9: 'userId' -> 'UserId'
             UserId: new ObjectId(userId)
         });
 
@@ -348,7 +357,7 @@ app.post('/alarmes/adiar/:id', autenticarToken, async (req, res) => {
             { _id: new ObjectId(id) },
             { $set: { 
                 Horario: novoHorario, 
-                Status: "Ativo", 
+                Status: "Ativo", // Força o novo status
                 Mensagem: `(Adiado ${minutos}min) ${msgBase}`, 
                 MensagemOriginal: msgBase,
                 HorarioBaseRecorrencia: new Date(horarioBase) 
@@ -373,7 +382,6 @@ app.get('/tasks/cleanup-old-history', async (req, res) => {
         const dataLimite = new Date();
         dataLimite.setDate(dataLimite.getDate() - 30);
         
-        // CORREÇÃO 10: Inclui os status numéricos antigos na limpeza
         const statusDeHistorico = ["DisparadoVisto", 1, 2, 3]; 
 
         const resultado = await db.collection('alarmes').deleteMany({
@@ -401,7 +409,6 @@ app.get('/alarmes/:id', autenticarToken, async (req, res) => {
     try {
         const alarme = await db.collection('alarmes').findOne({
             _id: new ObjectId(req.params.id),
-            // CORREÇÃO 11: 'userId' -> 'UserId'
             UserId: new ObjectId(req.userId)
         });
         if (!alarme) return res.status(404).json({ success: false, message: "Alarme não encontrado" });
@@ -416,10 +423,11 @@ app.post('/alarmes', autenticarToken, async (req, res) => {
     try {
         const alarme = req.body;
         
-        // CORREÇÃO 12: 'userId' -> 'UserId'
+        // Garante o UserId (maiúsculo)
         alarme.UserId = new ObjectId(req.userId);
         alarme.Horario = new Date(alarme.Horario);
         
+        // Garante o Status novo
         alarme.Status = "Ativo";
 
         if(alarme.IsRecorrente) {
@@ -451,7 +459,7 @@ app.put('/alarmes/:id', autenticarToken, async (req, res) => {
         delete alarmeUpdate._id; 
         
         alarmeUpdate.Horario = new Date(alarmeUpdate.Horario);
-        alarmeUpdate.Status = "Ativo";
+        alarmeUpdate.Status = "Ativo"; // Garante o Status novo
         
         if(alarmeUpdate.IsRecorrente) {
             const agora = new Date();
@@ -466,7 +474,6 @@ app.put('/alarmes/:id', autenticarToken, async (req, res) => {
         }
 
         const result = await db.collection('alarmes').updateOne(
-            // CORREÇÃO 13: 'userId' -> 'UserId'
             { _id: new ObjectId(id), UserId: new ObjectId(req.userId) },
             { $set: alarmeUpdate }
         );
@@ -486,7 +493,6 @@ app.delete('/alarmes/:id', autenticarToken, async (req, res) => {
         const { id } = req.params;
         const result = await db.collection('alarmes').deleteOne({
             _id: new ObjectId(id),
-            // CORREÇÃO 14: 'userId' -> 'UserId'
             UserId: new ObjectId(req.userId)
         });
 
