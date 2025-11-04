@@ -32,13 +32,33 @@ const autenticarToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1]; 
     
-    if (token == null) return res.sendStatus(401); 
+    if (token == null) return res.sendStatus(401); // Não autorizado
 
     jwt.verify(token, jwtSecret, (err, user) => {
-        if (err) return res.sendStatus(403); 
-        // Usa o 'userId' que definimos no payload do token
-        req.userId = user.userId; 
-        next();
+        if (err) return res.sendStatus(403); // Token inválido
+        
+        // ==================================================================
+        // *** INÍCIO DA CORREÇÃO FINAL ***
+        // ==================================================================
+        
+        // Procura o ID no payload 'user.userId' (para tokens novos)
+        // OU no 'user.id' (para tokens antigos que ainda podem existir)
+        const userIdFromToken = user.userId || user.id;
+
+        if (!userIdFromToken) {
+            // Se o token não tem nem .id nem .userId, é inválido
+            console.error("Token inválido, sem 'userId' ou 'id' no payload.");
+            return res.sendStatus(403); 
+        }
+
+        // Adiciona o ID (encontrado) ao 'req'
+        req.userId = userIdFromToken; 
+        
+        // ==================================================================
+        // *** FIM DA CORREÇÃO FINAL ***
+        // ==================================================================
+        
+        next(); // Continua para a rota
     });
 };
 
