@@ -1,4 +1,4 @@
-// index.js (Servidor Backend - v8 "CORREÇÃO HÍBRIDA" FINAL)
+// index.js (Servidor Backend - v10 CORREÇÃO DEFINITIVA DO CÁLCULO DE DATA)
 require('dotenv').config();
 const { MongoClient, ObjectId } = require('mongodb'); 
 const express = require('express');
@@ -45,7 +45,6 @@ const autenticarToken = (req, res, next) => {
             return res.sendStatus(403);
         }
         
-        // userId (do token) vai ser SEMPRE uma string
         const userIdFromToken = user.userId || user.id;
 
         if (!userIdFromToken) {
@@ -86,7 +85,6 @@ app.post('/login', async (req, res) => {
         const match = await bcrypt.compare(password, storedHash); 
         
         if (match) {
-            // .toString() funciona quer o user._id seja String ou ObjectId
             const token = jwt.sign(
                 { userId: user._id.toString() }, 
                 jwtSecret,
@@ -105,41 +103,68 @@ app.post('/login', async (req, res) => {
 
 // --- Rotas da API de Alarmes ---
 
-// (A função calcularProximaExecucao não foi alterada)
+// ==================================================================
+// *** CORREÇÃO (BUG 3: Cálculo de Data Recorrente) ***
+// Esta função é chamada DEPOIS que um alarme toca (em /tocar e /visto)
+// para calcular a PRÓXIMA data futura.
+// ==================================================================
 function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], diasMes = []) {
-    let proximaData = new Date(baseHorario.getTime());
+    let proximaData = new Date(); // Começa a calcular a partir de AGORA
+    const agora = new Date();
+    
+    // Pega a HORA e MINUTO desejados do alarme original
+    const horarioBase = new Date(baseHorario);
+    const hora = horarioBase.getHours();
+    const minuto = horarioBase.getMinutes();
+    
+    // Define a hora/minuto na data de hoje
+    proximaData.setHours(hora, minuto, 0, 0);
+
     if (tipoRecorrencia === 0) tipoRecorrencia = "Semanal";
+
     const diasSemanaNum = (diasSemana || []).map(d => parseInt(d)).filter(d => !isNaN(d)).sort((a, b) => a - b); 
     const diasMesNum = (diasMes || []).map(d => parseInt(d)).filter(d => !isNaN(d)).sort((a, b) => a - b); 
-    const agora = new Date();
-    if (proximaData <= agora) proximaData = agora;
-    proximaData.setSeconds(proximaData.getSeconds() + 1);
-    if (tipoRecorrencia === 'diariamente') {
-        proximaData.setDate(proximaData.getDate() + 1);
-    } else if (tipoRecorrencia === 'semanalmente' && diasSemanaNum.length > 0) {
-        const hojeNum = proximaData.getDay(); 
-        let proximoDiaSemana = diasSemanaNum.find(dia => dia > hojeNum);
-        if (proximoDiaSemana !== undefined) {
-            proximaData.setDate(proximaData.getDate() + (proximoDiaSemana - hojeNum));
+
+    // Loop de segurança: garante que a data calculada esteja no futuro
+    while (proximaData <= agora) {
+        let dataBaseLoop = new Date(proximaData.getTime());
+        
+        if (tipoRecorrencia === 'diariamente') {
+            proximaData.setDate(dataBaseLoop.getDate() + 1);
+            
+        } else if (tipoRecorrencia === 'semanalmente' && diasSemanaNum.length > 0) {
+            const hojeNum = dataBaseLoop.getDay();
+            let proximoDiaSemana = diasSemanaNum.find(dia => dia > hojeNum); // Procura um dia DEPOIS
+            if (proximoDiaSemana !== undefined) {
+                proximaData.setDate(dataBaseLoop.getDate() + (proximoDiaSemana - hojeNum));
+            } else {
+                // Próxima semana
+                proximaData.setDate(dataBaseLoop.getDate() + (7 - hojeNum + diasSemanaNum[0]));
+            }
+        } else if (tipoRecorrencia === 'mensalmente' && diasMesNum.length > 0) {
+            const hojeDia = dataBaseLoop.getDate();
+            let proximoDiaMes = diasMesNum.find(dia => dia > hojeDia); // Procura um dia DEPOIS
+            if (proximoDiaMes !== undefined) {
+                let dataTeste = new Date(dataBaseLoop.getTime());
+                dataTeste.setDate(proximoDiaMes);
+                if (dataTeste.getMonth() === dataBaseLoop.getMonth()) {
+                    proximaData.setDate(proximoDiaMes);
+                } else {
+                    proximaData.setMonth(dataBaseLoop.getMonth() + 1, diasMesNum[0]);
+                }
+            } else {
+                // Próximo mês
+                proximaData.setMonth(dataBaseLoop.getMonth() + 1, diasMesNum[0]);
+            }
         } else {
-            proximaData.setDate(proximaData.getDate() + (7 - hojeNum + diasSemanaNum[0]));
+            // Não recorrente ou dados inválidos, apenas avança 1 dia
+            proximaData.setDate(dataBaseLoop.getDate() + 1);
         }
-    } else if (tipoRecorrencia === 'mensalmente' && diasMesNum.length > 0) {
-        const hojeDia = proximaData.getDate(); 
-        let proximoDiaMes = diasMesNum.find(dia => dia > hojeDia);
-        if (proximoDiaMes !== undefined) {
-             let dataTeste = new Date(proximaData.getTime());
-             dataTeste.setDate(proximoDiaMes);
-             if (dataTeste.getMonth() === proximaData.getMonth()) {
-                 proximaData.setDate(proximaData.getDate());
-             } else {
-                 proximaData.setMonth(proximaData.getMonth() + 1, diasMesNum[0]);
-             }
-        } else {
-            proximaData.setMonth(proximaData.getMonth() + 1, diasMesNum[0]);
-        }
+        
+        // Re-aplica a hora/minuto na nova data
+        proximaData.setHours(hora, minuto, 0, 0);
     }
-    proximaData.setHours(baseHorario.getHours(), baseHorario.getMinutes(), baseHorario.getSeconds(), 0);
+    
     return proximaData;
 }
 
@@ -147,10 +172,13 @@ function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], 
 // Função auxiliar para tentar converter para ObjectId (se falhar, retorna null)
 function tryParseObjectId(idString) {
     try {
-        return new ObjectId(idString);
+        if (idString && /^[0-9a-fA-F]{24}$/.test(idString)) {
+             return new ObjectId(idString);
+        }
     } catch (e) {
         return null;
     }
+    return null;
 }
 
 // GET /alarmes/ativos
@@ -160,20 +188,16 @@ app.get('/alarmes/ativos', autenticarToken, async (req, res) => {
         const statusAtivos = ["Ativo", 0];
         const userIdAsObjectId = tryParseObjectId(req.userId);
 
-        // CORREÇÃO HÍBRIDA: Procura por UserId (String) OU UserId (ObjectId)
         const query = {
-            $or: [
-                { UserId: req.userId }, // Procura pela String
-                { UserId: userIdAsObjectId } // Procura pelo ObjectId
-            ],
+            $or: [ { UserId: req.userId }, { UserId: userIdAsObjectId } ],
             Status: { $in: statusAtivos }
         };
+        if (!userIdAsObjectId) {
+            delete query.$or;
+            query.UserId = req.userId;
+        }
 
-        const alarmes = await db.collection('alarmes')
-            .find(query)
-            .sort({ Horario: 1 })
-            .toArray();
-        
+        const alarmes = await db.collection('alarmes').find(query).sort({ Horario: 1 }).toArray();
         console.log(`[LOG /ativos] Sucesso. Encontrados ${alarmes.length} alarmes ativos.`);
         res.json({ success: true, alarmes });
     } catch (e) {
@@ -189,21 +213,16 @@ app.get('/alarmes/historico', autenticarToken, async (req, res) => {
         const statusDeHistorico = ["DisparadoVisto", 1, 2, 3];
         const userIdAsObjectId = tryParseObjectId(req.userId);
 
-        // CORREÇÃO HÍBRIDA: Procura por UserId (String) OU UserId (ObjectId)
         const query = {
-            $or: [
-                { UserId: req.userId }, // Procura pela String
-                { UserId: userIdAsObjectId } // Procura pelo ObjectId
-            ],
+            $or: [ { UserId: req.userId }, { UserId: userIdAsObjectId } ],
             Status: { $in: statusDeHistorico }
         };
+        if (!userIdAsObjectId) {
+            delete query.$or;
+            query.UserId = req.userId;
+        }
 
-        const alarmes = await db.collection('alarmes')
-            .find(query)
-            .sort({ Horario: -1 })
-            .limit(100)
-            .toArray();
-        
+        const alarmes = await db.collection('alarmes').find(query).sort({ Horario: -1 }).limit(100).toArray();
         console.log(`[LOG /historico] Sucesso. Encontrados ${alarmes.length} itens no histórico.`);
         res.json({ success: true, alarmes });
     } catch (e) {
@@ -218,14 +237,14 @@ app.delete('/alarmes/historico/limpar', autenticarToken, async (req, res) => {
         const statusDeHistorico = ["DisparadoVisto", 1, 2, 3];
         const userIdAsObjectId = tryParseObjectId(req.userId);
 
-        // CORREÇÃO HÍBRIDA: Limpa para ambos os tipos
         const query = {
-            $or: [
-                { UserId: req.userId },
-                { UserId: userIdAsObjectId }
-            ],
+            $or: [ { UserId: req.userId }, { UserId: userIdAsObjectId } ],
             Status: { $in: statusDeHistorico }
         };
+        if (!userIdAsObjectId) {
+            delete query.$or;
+            query.UserId = req.userId;
+        }
         
         await db.collection('alarmes').deleteMany(query);
         res.json({ success: true });
@@ -239,15 +258,15 @@ app.get('/alarmes/proximos', autenticarToken, async (req, res) => {
         const statusAtivos = ["Ativo", 0];
         const userIdAsObjectId = tryParseObjectId(req.userId);
 
-        // CORREÇÃO HÍBRIDA: Procura por UserId (String) OU UserId (ObjectId)
         const query = {
-            $or: [
-                { UserId: req.userId },
-                { UserId: userIdAsObjectId }
-            ],
+            $or: [ { UserId: req.userId }, { UserId: userIdAsObjectId } ],
             Status: { $in: statusAtivos },
             Horario: { $lte: agora } 
         };
+        if (!userIdAsObjectId) {
+            delete query.$or;
+            query.UserId = req.userId;
+        }
 
         const alarmes = await db.collection('alarmes').find(query).toArray();
         res.json({ success: true, alarmes });
@@ -261,7 +280,6 @@ app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
     const userIdAsObjectId = tryParseObjectId(userId);
 
     try {
-        // CORREÇÃO HÍBRIDA: _id é ObjectId, UserId pode ser String OU ObjectId
         const alarme = await db.collection('alarmes').findOne({
             _id: new ObjectId(id),
             $or: [ { UserId: userId }, { UserId: userIdAsObjectId } ]
@@ -270,6 +288,7 @@ app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
         if (!alarme) return res.status(404).json({ message: "Alarme não encontrado" });
 
         if (alarme.IsRecorrente) {
+            // CORREÇÃO: Passa o Horário BASE (ex: 8:30) para o cálculo
             const proximaData = calcularProximaExecucao(
                 alarme.HorarioBaseRecorrencia || alarme.Horario, 
                 alarme.TipoRecorrencia, alarme.DiasSemana, alarme.DiasMes
@@ -279,7 +298,7 @@ app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
                 { $set: { 
                     Horario: proximaData, Status: "Ativo", 
                     Mensagem: alarme.MensagemOriginal || alarme.Mensagem,
-                    UserId: new ObjectId(userId) // <-- FORÇA A CORREÇÃO
+                    UserId: userIdAsObjectId || userId 
                   },
                   $unset: { MensagemOriginal: "", HorarioBaseRecorrencia: "" } }
             );
@@ -288,7 +307,7 @@ app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
                 { _id: new ObjectId(id) }, 
                 { $set: { 
                     Status: "DisparadoVisto",
-                    UserId: new ObjectId(userId) // <-- FORÇA A CORREÇÃO
+                    UserId: userIdAsObjectId || userId
                   }, 
                   $unset: { MensagemOriginal: "", HorarioBaseRecorrencia: "" } }
             );
@@ -312,6 +331,7 @@ app.post('/alarmes/visto/:id', autenticarToken, async (req, res) => {
         if (!alarme) return res.status(404).json({ success: false, message: "Alarme não encontrado" });
 
         if (alarme.IsRecorrente) {
+            // CORREÇÃO: Passa o Horário BASE (ex: 8:30) para o cálculo
             const proximaData = calcularProximaExecucao(
                 alarme.HorarioBaseRecorrencia || alarme.Horario, 
                 alarme.TipoRecorrencia, alarme.DiasSemana, alarme.DiasMes
@@ -321,7 +341,7 @@ app.post('/alarmes/visto/:id', autenticarToken, async (req, res) => {
                 { $set: { 
                     Horario: proximaData, Status: "Ativo", 
                     Mensagem: alarme.MensagemOriginal || alarme.Mensagem,
-                    UserId: new ObjectId(userId) // <-- FORÇA A CORREÇÃO
+                    UserId: userIdAsObjectId || userId
                   },
                   $unset: { MensagemOriginal: "", HorarioBaseRecorrencia: "" } }
             );
@@ -330,7 +350,7 @@ app.post('/alarmes/visto/:id', autenticarToken, async (req, res) => {
                 { _id: new ObjectId(id) }, 
                 { $set: { 
                     Status: "DisparadoVisto",
-                    UserId: new ObjectId(userId) // <-- FORÇA A CORREÇÃO
+                    UserId: userIdAsObjectId || userId
                   },
                   $unset: { MensagemOriginal: "", HorarioBaseRecorrencia: "" } }
             );
@@ -366,7 +386,7 @@ app.post('/alarmes/adiar/:id', autenticarToken, async (req, res) => {
                 Mensagem: `(Adiado ${minutos}min) ${msgBase}`, 
                 MensagemOriginal: msgBase,
                 HorarioBaseRecorrencia: new Date(horarioBase),
-                UserId: new ObjectId(userId) // <-- FORÇA A CORREÇÃO
+                UserId: userIdAsObjectId || userId
             }}
         );
         res.json({ success: true });
@@ -410,32 +430,53 @@ app.get('/alarmes/:id', autenticarToken, async (req, res) => {
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
+// ==================================================================
+// *** CORREÇÃO (BUG 3: Cálculo de Data Recorrente) ***
+// Aplicada nas rotas /alarmes (POST) e /alarmes/:id (PUT)
+// ==================================================================
+
 // POST /alarmes (Criar)
 app.post('/alarmes', autenticarToken, async (req, res) => {
     try {
         const alarme = req.body;
+        const userIdAsObjectId = tryParseObjectId(req.userId);
         
-        // ==================================================================
-        // *** CORREÇÃO DE ESCRITA ***
-        // Força o UserId a ser salvo como ObjectId
-        alarme.UserId = new ObjectId(req.userId); 
-        // ==================================================================
+        // 1. Define o UserId com o tipo correto (ObjectId ou String)
+        alarme.UserId = userIdAsObjectId || req.userId; 
         
-        alarme.Horario = new Date(alarme.Horario);
+        // 2. Pega a data/hora exata que o utilizador escolheu no input
+        const dataBase = new Date(alarme.Horario);
+        
         alarme.Status = "Ativo"; 
+        const agora = new Date();
 
         if(alarme.IsRecorrente) {
-            const agora = new Date();
-            alarme.Horario = calcularProximaExecucao(
-                agora, alarme.TipoRecorrencia, alarme.DiasSemana, alarme.DiasMes
-            );
-            const horarioBase = new Date(req.body.Horario); 
-            alarme.Horario.setHours(horarioBase.getHours(), horarioBase.getMinutes(), 0, 0);
+            // 3. Verifica se a data escolhida já passou
+            if (dataBase <= agora) {
+                // Se já passou, calcula a *próxima* data a partir de agora
+                console.log("[LOG /alarmes] Data recorrente no passado. Calculando próxima...");
+                alarme.Horario = calcularProximaExecucao(
+                    agora, // Base é AGORA
+                    alarme.TipoRecorrencia, 
+                    alarme.DiasSemana, 
+                    alarme.DiasMes
+                );
+            } else {
+                // Se for no futuro (ex: daqui a 2 dias), usa a data exata.
+                console.log("[LOG /alarmes] Data recorrente no futuro. Usando data escolhida.");
+                alarme.Horario = dataBase;
+            }
+        } else {
+             // Se não for recorrente, apenas usa a data que o utilizador escolheu
+            alarme.Horario = dataBase;
         }
 
         const result = await db.collection('alarmes').insertOne(alarme);
         res.status(201).json({ success: true, insertedId: result.insertedId });
-    } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+    } catch (e) { 
+        console.error("[LOG /alarmes (POST)] ERRO:", e);
+        res.status(500).json({ success: false, message: e.message }); 
+    }
 });
 
 // PUT /alarmes/:id (Atualizar)
@@ -448,25 +489,36 @@ app.put('/alarmes/:id', autenticarToken, async (req, res) => {
 
         delete alarmeUpdate._id; 
         
-        alarmeUpdate.Horario = new Date(alarmeUpdate.Horario);
+        // 1. Pega a data/hora exata que o utilizador escolheu
+        const dataBase = new Date(alarmeUpdate.Horario);
         alarmeUpdate.Status = "Ativo"; 
         
-        // ==================================================================
-        // *** CORREÇÃO DE ESCRITA ***
-        // Força o UserId a ser salvo como ObjectId
-        alarmeUpdate.UserId = new ObjectId(req.userId);
-        // ==================================================================
+        // 2. Garante que o UserId está no tipo correto
+        alarmeUpdate.UserId = userIdAsObjectId || userId;
         
         delete alarmeUpdate.MensagemOriginal;
         delete alarmeUpdate.HorarioBaseRecorrencia;
 
+        const agora = new Date();
+
         if(alarmeUpdate.IsRecorrente) {
-            const agora = new Date();
-            alarmeUpdate.Horario = calcularProximaExecucao(
-                agora, alarmeUpdate.TipoRecorrencia, alarmeUpdate.DiasSemana, alarmeUpdate.DiasMes
-            );
-            const horarioBase = new Date(req.body.Horario);
-            alarmeUpdate.Horario.setHours(horarioBase.getHours(), horarioBase.getMinutes(), 0, 0);
+            // 3. Verifica se a data escolhida já passou
+            if (dataBase <= agora) {
+                // Se já passou, calcula a *próxima* data a partir de agora
+                console.log("[LOG /alarmes (PUT)] Data recorrente no passado. Calculando próxima...");
+                alarmeUpdate.Horario = calcularProximaExecucao(
+                    agora, // Base é AGORA
+                    alarmeUpdate.TipoRecorrencia, 
+                    alarmeUpdate.DiasSemana, 
+                    alarmeUpdate.DiasMes
+                );
+            } else {
+                // Se for no futuro, usa a data exata.
+                console.log("[LOG /alarmes (PUT)] Data recorrente no futuro. Usando data escolhida.");
+                alarmeUpdate.Horario = dataBase;
+            }
+        } else {
+            alarmeUpdate.Horario = dataBase;
         }
 
         const result = await db.collection('alarmes').updateOne(
@@ -479,7 +531,10 @@ app.put('/alarmes/:id', autenticarToken, async (req, res) => {
             return res.status(404).json({ success: false, message: "Alarme não encontrado" });
         }
         res.json({ success: true });
-    } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+    } catch (e) { 
+        console.error("[LOG /alarmes (PUT)] ERRO:", e);
+        res.status(500).json({ success: false, message: e.message }); 
+    }
 });
 
 // DELETE /alarmes/:id
@@ -505,3 +560,4 @@ app.delete('/alarmes/:id', autenticarToken, async (req, res) => {
 app.listen(port, () => {
     console.log(`API RNLARME rodando na porta ${port}`);
 });
+
