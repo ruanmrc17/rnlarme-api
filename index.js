@@ -295,10 +295,14 @@ app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
         if (!alarme) return res.status(404).json({ message: "Alarme não encontrado" });
 
         if (alarme.IsRecorrente) {
-            // CORREÇÃO: Passa o Horário BASE (ex: 8:30) para o cálculo
+            // =======================================================
+            // CORREÇÃO v11.3 - Case Sensitivity
+            // =======================================================
             const proximaData = calcularProximaExecucao(
                 alarme.HorarioBaseRecorrencia || alarme.Horario, 
-                alarme.TipoRecorrencia, alarme.DiasSemana, alarme.DiasMes
+                alarme.RecorrenciaTipo, // <-- CORRIGIDO
+                alarme.DiasDaSemana,   // <-- CORRIGIDO
+                alarme.DiasDoMes       // <-- CORRIGIDO
             );
             await db.collection('alarmes').updateOne(
                 { _id: new ObjectId(id) }, 
@@ -338,9 +342,14 @@ app.post('/alarmes/visto/:id', autenticarToken, async (req, res) => {
         if (!alarme) return res.status(404).json({ success: false, message: "Alarme não encontrado" });
 
         if (alarme.IsRecorrente) {
+            // =======================================================
+            // CORREÇÃO v11.3 - Case Sensitivity
+            // =======================================================
             const proximaData = calcularProximaExecucao(
                 alarme.HorarioBaseRecorrencia || alarme.Horario, 
-                alarme.TipoRecorrencia, alarme.DiasSemana, alarme.DiasMes
+                alarme.RecorrenciaTipo, // <-- CORRIGIDO
+                alarme.DiasDaSemana,   // <-- CORRIGIDO
+                alarme.DiasDoMes       // <-- CORRIGIDO
             );
             await db.collection('alarmes').updateOne(
                 { _id: new ObjectId(id) }, 
@@ -448,11 +457,8 @@ app.post('/alarmes', autenticarToken, async (req, res) => {
         const alarme = req.body;
         const userIdAsObjectId = tryParseObjectId(req.userId);
         
-        // =======================================================
-        // ADICIONANDO LOGS DE DEBUG
         console.log("[LOG /alarmes (POST)] Dados recebidos (req.body):");
         console.log(JSON.stringify(alarme, null, 2));
-        // =======================================================
 
         alarme.UserId = userIdAsObjectId || req.userId; 
         const dataBaseDoInput = new Date(alarme.Horario);
@@ -460,11 +466,14 @@ app.post('/alarmes', autenticarToken, async (req, res) => {
 
         if (alarme.IsRecorrente) {
             console.log("[LOG /alarmes (POST)] 'IsRecorrente' é TRUE. Calculando a primeira ocorrência...");
+            // =======================================================
+            // CORREÇÃO v11.3 - Case Sensitivity
+            // =======================================================
             alarme.Horario = calcularProximaExecucao(
-                dataBaseDoInput, // Passamos a data/hora do input (só a hora importa)
-                alarme.TipoRecorrencia, 
-                alarme.DiasSemana, 
-                alarme.DiasMes
+                dataBaseDoInput,
+                alarme.RecorrenciaTipo, // <-- CORRIGIDO
+                alarme.DiasDaSemana,   // <-- CORRIGIDO
+                alarme.DiasDoMes       // <-- CORRIGIDO
             );
             console.log(`[LOG /alarmes (POST)] Nova data calculada: ${alarme.Horario}`);
         } else {
@@ -494,11 +503,8 @@ app.put('/alarmes/:id', autenticarToken, async (req, res) => {
         const userId = req.userId;
         const userIdAsObjectId = tryParseObjectId(userId);
 
-        // =======================================================
-        // ADICIONANDO LOGS DE DEBUG
         console.log("[LOG /alarmes (PUT)] Dados recebidos (req.body):");
         console.log(JSON.stringify(alarmeUpdate, null, 2));
-        // =======================================================
 
         delete alarmeUpdate._id; 
         
@@ -512,14 +518,16 @@ app.put('/alarmes/:id', autenticarToken, async (req, res) => {
         delete alarmeUpdate.HorarioBaseRecorrencia;
 
         if (alarmeUpdate.IsRecorrente) {
-            // Se este log não aparecer, o 'IsRecorrente' veio como false
             console.log("[LOG /alarmes (PUT)] 'IsRecorrente' é TRUE. Calculando a primeira ocorrência...");
             
+            // =======================================================
+            // CORREÇÃO v11.3 - Case Sensitivity
+            // =======================================================
             alarmeUpdate.Horario = calcularProximaExecucao(
                 dataBaseDoInput,
-                alarmeUpdate.TipoRecorrencia, 
-                alarmeUpdate.DiasSemana, 
-                alarmeUpdate.DiasMes
+                alarmeUpdate.RecorrenciaTipo, // <-- CORRIGIDO
+                alarmeUpdate.DiasDaSemana,   // <-- CORRIGIDO
+                alarmeUpdate.DiasDoMes       // <-- CORRIGIDO
             );
             
             console.log(`[LOG /alarmes (PUT)] Nova data calculada: ${alarmeUpdate.Horario}`);
@@ -572,5 +580,4 @@ app.delete('/alarmes/:id', autenticarToken, async (req, res) => {
 app.listen(port, () => {
     console.log(`API RNLARME rodando na porta ${port}`);
 });
-
 
