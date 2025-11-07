@@ -28,7 +28,8 @@ client.connect().then(() => {
 
 // --- Middleware de Autenticação ---
 const autenticarToken = (req, res, next) => {
-    console.log("[LOG Autenticar] Recebendo chamada para:", req.path);
+    // Reduzindo o spam de log
+    // console.log("[LOG Autenticar] Recebendo chamada para:", req.path);
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1]; 
     
@@ -51,7 +52,7 @@ const autenticarToken = (req, res, next) => {
         }
 
         req.userId = userIdFromToken.trim(); // req.userId é uma STRING
-        console.log(`[LOG Autenticar] Token OK. UserId (string) definido como: ${req.userId}`);
+        // console.log(`[LOG Autenticar] Token OK. UserId (string) definido como: ${req.userId}`);
         
         next();
     });
@@ -189,7 +190,7 @@ function tryParseObjectId(idString) {
 
 // GET /alarmes/ativos
 app.get('/alarmes/ativos', autenticarToken, async (req, res) => {
-    console.log(`[LOG /ativos] Tentando carregar. UserId (string) = ${req.userId}`);
+    // console.log(`[LOG /ativos] Tentando carregar. UserId (string) = ${req.userId}`);
     try {
         const statusAtivos = ["Ativo", 0];
         const userIdAsObjectId = tryParseObjectId(req.userId);
@@ -204,7 +205,7 @@ app.get('/alarmes/ativos', autenticarToken, async (req, res) => {
         }
 
         const alarmes = await db.collection('alarmes').find(query).sort({ Horario: 1 }).toArray();
-        console.log(`[LOG /ativos] Sucesso. Encontrados ${alarmes.length} alarmes ativos.`);
+        // console.log(`[LOG /ativos] Sucesso. Encontrados ${alarmes.length} alarmes ativos.`);
         res.json({ success: true, alarmes });
     } catch (e) {
         console.error(`[LOG /ativos] ERRO no 'catch' da rota:`, e);
@@ -214,7 +215,7 @@ app.get('/alarmes/ativos', autenticarToken, async (req, res) => {
 
 // GET /alarmes/historico
 app.get('/alarmes/historico', autenticarToken, async (req, res) => {
-    console.log(`[LOG /historico] Tentando carregar. UserId (string) = ${req.userId}`);
+    // console.log(`[LOG /historico] Tentando carregar. UserId (string) = ${req.userId}`);
     try {
         const statusDeHistorico = ["DisparadoVisto", 1, 2, 3];
         const userIdAsObjectId = tryParseObjectId(req.userId);
@@ -229,7 +230,7 @@ app.get('/alarmes/historico', autenticarToken, async (req, res) => {
         }
 
         const alarmes = await db.collection('alarmes').find(query).sort({ Horario: -1 }).limit(100).toArray();
-        console.log(`[LOG /historico] Sucesso. Encontrados ${alarmes.length} itens no histórico.`);
+        // console.log(`[LOG /historico] Sucesso. Encontrados ${alarmes.length} itens no histórico.`);
         res.json({ success: true, alarmes });
     } catch (e) {
         console.error(`[LOG /historico] ERRO no 'catch' da rota:`, e);
@@ -442,104 +443,108 @@ app.get('/alarmes/:id', autenticarToken, async (req, res) => {
 
 // POST /alarmes (Criar)
 app.post('/alarmes', autenticarToken, async (req, res) => {
+    console.log(`[LOG /alarmes (POST)] Início da rota.`);
     try {
         const alarme = req.body;
         const userIdAsObjectId = tryParseObjectId(req.userId);
         
-        // 1. Define o UserId com o tipo correto (ObjectId ou String)
+        // =======================================================
+        // ADICIONANDO LOGS DE DEBUG
+        console.log("[LOG /alarmes (POST)] Dados recebidos (req.body):");
+        console.log(JSON.stringify(alarme, null, 2));
+        // =======================================================
+
         alarme.UserId = userIdAsObjectId || req.userId; 
-        
-        // 2. Pega a data/hora exata que o utilizador escolheu no input
-        // Isso é o 'HorarioBase'
         const dataBaseDoInput = new Date(alarme.Horario);
-        
         alarme.Status = "Ativo"; 
 
         if (alarme.IsRecorrente) {
-            // *** ESTA É A CORREÇÃO ***
-            // Para um alarme recorrente, NÃO importa a DATA que o usuário
-            // escolheu (ex: Sábado 08/11), importa a HORA (8:30) e os
-            // dias da semana (Seg-Sex).
-            // Nós *SEMPRE* calculamos a primeira ocorrência futura.
-            
-            console.log("[LOG /alarmes (POST)] Alarme recorrente. Calculando a primeira ocorrência...");
-            
-            // O 'baseHorario' é a HORA/MINUTO que o usuário quer.
-            // O 'calcularProximaExecucao' vai começar a partir de 'agora'
-            // e achar o primeiro slot.
+            console.log("[LOG /alarmes (POST)] 'IsRecorrente' é TRUE. Calculando a primeira ocorrência...");
             alarme.Horario = calcularProximaExecucao(
                 dataBaseDoInput, // Passamos a data/hora do input (só a hora importa)
                 alarme.TipoRecorrencia, 
                 alarme.DiasSemana, 
                 alarme.DiasMes
             );
-            
+            console.log(`[LOG /alarmes (POST)] Nova data calculada: ${alarme.Horario}`);
         } else {
-            // Se não for recorrente, apenas usa a data que o utilizador escolheu
+            console.log("[LOG /alarmes (POST)] 'IsRecorrente' é FALSE. Usando data do input.");
             alarme.Horario = dataBaseDoInput;
         }
 
         const result = await db.collection('alarmes').insertOne(alarme);
+        console.log("[LOG /alarmes (POST)] Alarme criado com sucesso.");
         res.status(201).json({ success: true, insertedId: result.insertedId });
     } catch (e) { 
-        console.error("[LOG /alarmes (POST)] ERRO:", e);
+        console.error("[LOG /alarmes (POST)] ERRO no 'catch':", e);
         res.status(500).json({ success: false, message: e.message }); 
     }
 });
 
+// ==================================================================
+// *** v11.1 DEBUG ***
+// Adicionados logs detalhados para investigar o problema do 'Salvar'
+// ==================================================================
 // PUT /alarmes/:id (Atualizar)
 app.put('/alarmes/:id', autenticarToken, async (req, res) => {
+    console.log(`[LOG /alarmes (PUT)] Início da rota. ID: ${req.params.id}`);
     try {
         const { id } = req.params; 
         const alarmeUpdate = req.body;
         const userId = req.userId;
         const userIdAsObjectId = tryParseObjectId(userId);
 
+        // =======================================================
+        // ADICIONANDO LOGS DE DEBUG
+        console.log("[LOG /alarmes (PUT)] Dados recebidos (req.body):");
+        console.log(JSON.stringify(alarmeUpdate, null, 2));
+        // =======================================================
+
         delete alarmeUpdate._id; 
         
-        // 1. Pega a data/hora exata que o utilizador escolheu
         const dataBaseDoInput = new Date(alarmeUpdate.Horario);
         
         alarmeUpdate.Status = "Ativo"; 
         
-        // 2. Garante que o UserId está no tipo correto
         alarmeUpdate.UserId = userIdAsObjectId || userId;
         
-        // 3. Limpa campos de "Adiado"
         delete alarmeUpdate.MensagemOriginal;
         delete alarmeUpdate.HorarioBaseRecorrencia;
 
         if (alarmeUpdate.IsRecorrente) {
-            // *** ESTA É A CORREÇÃO ***
-            // Se está atualizando para ser recorrente, calculamos a 
-            // primeira ocorrência futura a partir de agora.
-            
-            console.log("[LOG /alarmes (PUT)] Alarme recorrente. Calculando a primeira ocorrência...");
+            // Se este log não aparecer, o 'IsRecorrente' veio como false
+            console.log("[LOG /alarmes (PUT)] 'IsRecorrente' é TRUE. Calculando a primeira ocorrência...");
             
             alarmeUpdate.Horario = calcularProximaExecucao(
-                dataBaseDoInput, // Passamos a data/hora do input (só a hora importa)
+                dataBaseDoInput,
                 alarmeUpdate.TipoRecorrencia, 
                 alarmeUpdate.DiasSemana, 
                 alarmeUpdate.DiasMes
             );
+            
+            console.log(`[LOG /alarmes (PUT)] Nova data calculada: ${alarmeUpdate.Horario}`);
+
         } else {
-            // Se não for recorrente, usa a data exata do input
+            console.log("[LOG /alarmes (PUT)] 'IsRecorrente' é FALSE. Usando data do input.");
             alarmeUpdate.Horario = dataBaseDoInput;
         }
 
         const result = await db.collection('alarmes').updateOne(
             { _id: new ObjectId(id), $or: [ { UserId: userId }, { UserId: userIdAsObjectId } ] },
             { $set: alarmeUpdate,
-              // Limpa campos de 'adiar' caso existam
               $unset: { MensagemOriginal: "", HorarioBaseRecorrencia: "" } }
         );
         
         if (result.matchedCount === 0) {
+            console.error("[LOG /alarmes (PUT)] ERRO: Alarme não encontrado (matchedCount 0)");
             return res.status(404).json({ success: false, message: "Alarme não encontrado" });
         }
+        
+        console.log("[LOG /alarmes (PUT)] Alarme atualizado com sucesso.");
         res.json({ success: true });
+
     } catch (e) { 
-        console.error("[LOG /alarmes (PUT)] ERRO:", e);
+        console.error("[LOG /alarmes (PUT)] ERRO no 'catch':", e);
         res.status(500).json({ success: false, message: e.message }); 
     }
 });
@@ -560,10 +565,11 @@ app.delete('/alarmes/:id', autenticarToken, async (req, res) => {
             return res.status(404).json({ success: false, message: "Alarme não encontrado" });
         }
         res.status(204).send(); 
-    } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+    } catch (e) { res.status(500.json({ success: false, message: e.message }); }
 });
 
 // --- Iniciar Servidor ---
 app.listen(port, () => {
     console.log(`API RNLARME rodando na porta ${port}`);
 });
+
