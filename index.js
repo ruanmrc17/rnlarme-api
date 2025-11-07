@@ -103,8 +103,7 @@ app.post('/login', async (req, res) => {
 // --- Rotas da API de Alarmes ---
 
 // ==================================================================
-// Função para calcular a PRÓXIMA data futura.
-// (Esta função estava correta na v10)
+// *** CORREÇÃO v11.4 (BUG: String Mismatch 'Semanal' vs 'semanalmente') ***
 // ==================================================================
 function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], diasMes = []) {
     let proximaData = new Date(); // Começa a calcular a partir de AGORA
@@ -125,15 +124,16 @@ function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], 
     const diasMesNum = (diasMes || []).map(d => parseInt(d)).filter(d => !isNaN(d)).sort((a, b) => a - b); 
 
     // Loop de segurança: garante que a data calculada esteja no futuro
-    // Se proximaData (hoje às 8:30) já passou (ex: agora é 10:00),
-    // o loop vai rodar e calcular o *próximo* dia.
     while (proximaData <= agora) {
         let dataBaseLoop = new Date(proximaData.getTime());
         
-        if (tipoRecorrencia === 'diariamente') {
+        // =======================================================
+        // CORREÇÃO v11.4 - Usar "Semanal", "Diario", "Mensal"
+        // =======================================================
+        if (tipoRecorrencia === 'Diario') {
             proximaData.setDate(dataBaseLoop.getDate() + 1);
             
-        } else if (tipoRecorrencia === 'semanalmente' && diasSemanaNum.length > 0) {
+        } else if (tipoRecorrencia === 'Semanal' && diasSemanaNum.length > 0) {
             const hojeNum = dataBaseLoop.getDay();
             let proximoDiaSemana = diasSemanaNum.find(dia => dia > hojeNum); // Procura um dia DEPOIS
             if (proximoDiaSemana !== undefined) {
@@ -143,7 +143,7 @@ function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], 
                 // Próxima semana: (7 dias - hoje) + primeiro_dia_valido
                 proximaData.setDate(dataBaseLoop.getDate() + (7 - hojeNum + diasSemanaNum[0]));
             }
-        } else if (tipoRecorrencia === 'mensalmente' && diasMesNum.length > 0) {
+        } else if (tipoRecorrencia === 'Mensal' && diasMesNum.length > 0) {
             const hojeDia = dataBaseLoop.getDate();
             let proximoDiaMes = diasMesNum.find(dia => dia > hojeDia); // Procura um dia DEPOIS
             if (proximoDiaMes !== undefined) {
@@ -295,14 +295,11 @@ app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
         if (!alarme) return res.status(404).json({ message: "Alarme não encontrado" });
 
         if (alarme.IsRecorrente) {
-            // =======================================================
-            // CORREÇÃO v11.3 - Case Sensitivity
-            // =======================================================
             const proximaData = calcularProximaExecucao(
                 alarme.HorarioBaseRecorrencia || alarme.Horario, 
-                alarme.RecorrenciaTipo, // <-- CORRIGIDO
-                alarme.DiasDaSemana,   // <-- CORRIGIDO
-                alarme.DiasDoMes       // <-- CORRIGIDO
+                alarme.RecorrenciaTipo, // <-- CORRIGIDO v11.3
+                alarme.DiasDaSemana,   // <-- CORRIGIDO v11.3
+                alarme.DiasDoMes       // <-- CORRIGIDO v11.3
             );
             await db.collection('alarmes').updateOne(
                 { _id: new ObjectId(id) }, 
@@ -342,14 +339,11 @@ app.post('/alarmes/visto/:id', autenticarToken, async (req, res) => {
         if (!alarme) return res.status(404).json({ success: false, message: "Alarme não encontrado" });
 
         if (alarme.IsRecorrente) {
-            // =======================================================
-            // CORREÇÃO v11.3 - Case Sensitivity
-            // =======================================================
             const proximaData = calcularProximaExecucao(
                 alarme.HorarioBaseRecorrencia || alarme.Horario, 
-                alarme.RecorrenciaTipo, // <-- CORRIGIDO
-                alarme.DiasDaSemana,   // <-- CORRIGIDO
-                alarme.DiasDoMes       // <-- CORRIGIDO
+                alarme.RecorrenciaTipo, // <-- CORRIGIDO v11.3
+                alarme.DiasDaSemana,   // <-- CORRIGIDO v11.3
+                alarme.DiasDoMes       // <-- CORRIGIDO v11.3
             );
             await db.collection('alarmes').updateOne(
                 { _id: new ObjectId(id) }, 
@@ -445,11 +439,6 @@ app.get('/alarmes/:id', autenticarToken, async (req, res) => {
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
-// ==================================================================
-// *** CORREÇÃO v11 (BUG: Criação/Edição Recorrente) ***
-// Aplicada nas rotas /alarmes (POST) e /alarmes/:id (PUT)
-// ==================================================================
-
 // POST /alarmes (Criar)
 app.post('/alarmes', autenticarToken, async (req, res) => {
     console.log(`[LOG /alarmes (POST)] Início da rota.`);
@@ -466,14 +455,11 @@ app.post('/alarmes', autenticarToken, async (req, res) => {
 
         if (alarme.IsRecorrente) {
             console.log("[LOG /alarmes (POST)] 'IsRecorrente' é TRUE. Calculando a primeira ocorrência...");
-            // =======================================================
-            // CORREÇÃO v11.3 - Case Sensitivity
-            // =======================================================
             alarme.Horario = calcularProximaExecucao(
                 dataBaseDoInput,
-                alarme.RecorrenciaTipo, // <-- CORRIGIDO
-                alarme.DiasDaSemana,   // <-- CORRIGIDO
-                alarme.DiasDoMes       // <-- CORRIGIDO
+                alarme.RecorrenciaTipo, // <-- CORRIGIDO v11.3
+                alarme.DiasDaSemana,   // <-- CORRIGIDO v11.3
+                alarme.DiasDoMes       // <-- CORRIGIDO v11.3
             );
             console.log(`[LOG /alarmes (POST)] Nova data calculada: ${alarme.Horario}`);
         } else {
@@ -490,10 +476,6 @@ app.post('/alarmes', autenticarToken, async (req, res) => {
     }
 });
 
-// ==================================================================
-// *** v11.1 DEBUG ***
-// Adicionados logs detalhados para investigar o problema do 'Salvar'
-// ==================================================================
 // PUT /alarmes/:id (Atualizar)
 app.put('/alarmes/:id', autenticarToken, async (req, res) => {
     console.log(`[LOG /alarmes (PUT)] Início da rota. ID: ${req.params.id}`);
@@ -520,14 +502,11 @@ app.put('/alarmes/:id', autenticarToken, async (req, res) => {
         if (alarmeUpdate.IsRecorrente) {
             console.log("[LOG /alarmes (PUT)] 'IsRecorrente' é TRUE. Calculando a primeira ocorrência...");
             
-            // =======================================================
-            // CORREÇÃO v11.3 - Case Sensitivity
-            // =======================================================
             alarmeUpdate.Horario = calcularProximaExecucao(
                 dataBaseDoInput,
-                alarmeUpdate.RecorrenciaTipo, // <-- CORRIGIDO
-                alarmeUpdate.DiasDaSemana,   // <-- CORRIGIDO
-                alarmeUpdate.DiasDoMes       // <-- CORRIGIDO
+                alarmeUpdate.RecorrenciaTipo, // <-- CORRIGIDO v11.3
+                alarmeUpdate.DiasDaSemana,   // <-- CORRIGIDO v11.3
+                alarmeUpdate.DiasDoMes       // <-- CORRIGIDO v11.3
             );
             
             console.log(`[LOG /alarmes (PUT)] Nova data calculada: ${alarmeUpdate.Horario}`);
