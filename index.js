@@ -1,4 +1,3 @@
-// index.js (Servidor Backend - v10 CORREÇÃO DEFINITIVA DO CÁLCULO DE DATA)
 require('dotenv').config();
 const { MongoClient, ObjectId } = require('mongodb'); 
 const express = require('express');
@@ -28,7 +27,6 @@ client.connect().then(() => {
 });
 
 // --- Middleware de Autenticação ---
-// (Esta função está correta, lê o token e armazena req.userId como STRING)
 const autenticarToken = (req, res, next) => {
     console.log("[LOG Autenticar] Recebendo chamada para:", req.path);
     const authHeader = req.headers['authorization'];
@@ -104,15 +102,14 @@ app.post('/login', async (req, res) => {
 // --- Rotas da API de Alarmes ---
 
 // ==================================================================
-// *** CORREÇÃO (BUG 3: Cálculo de Data Recorrente) ***
-// Esta função é chamada DEPOIS que um alarme toca (em /tocar e /visto)
-// para calcular a PRÓXIMA data futura.
+// Função para calcular a PRÓXIMA data futura.
+// (Esta função estava correta na v10)
 // ==================================================================
 function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], diasMes = []) {
     let proximaData = new Date(); // Começa a calcular a partir de AGORA
     const agora = new Date();
     
-    // Pega a HORA e MINUTO desejados do alarme original
+    // Pega a HORA e MINUTO desejados do alarme original (ou do input)
     const horarioBase = new Date(baseHorario);
     const hora = horarioBase.getHours();
     const minuto = horarioBase.getMinutes();
@@ -120,12 +117,15 @@ function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], 
     // Define a hora/minuto na data de hoje
     proximaData.setHours(hora, minuto, 0, 0);
 
+    // Normalização (caso '0' venha do BD antigo)
     if (tipoRecorrencia === 0) tipoRecorrencia = "Semanal";
 
     const diasSemanaNum = (diasSemana || []).map(d => parseInt(d)).filter(d => !isNaN(d)).sort((a, b) => a - b); 
     const diasMesNum = (diasMes || []).map(d => parseInt(d)).filter(d => !isNaN(d)).sort((a, b) => a - b); 
 
     // Loop de segurança: garante que a data calculada esteja no futuro
+    // Se proximaData (hoje às 8:30) já passou (ex: agora é 10:00),
+    // o loop vai rodar e calcular o *próximo* dia.
     while (proximaData <= agora) {
         let dataBaseLoop = new Date(proximaData.getTime());
         
@@ -136,20 +136,25 @@ function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], 
             const hojeNum = dataBaseLoop.getDay();
             let proximoDiaSemana = diasSemanaNum.find(dia => dia > hojeNum); // Procura um dia DEPOIS
             if (proximoDiaSemana !== undefined) {
+                // Achou um dia ainda esta semana
                 proximaData.setDate(dataBaseLoop.getDate() + (proximoDiaSemana - hojeNum));
             } else {
-                // Próxima semana
+                // Próxima semana: (7 dias - hoje) + primeiro_dia_valido
                 proximaData.setDate(dataBaseLoop.getDate() + (7 - hojeNum + diasSemanaNum[0]));
             }
         } else if (tipoRecorrencia === 'mensalmente' && diasMesNum.length > 0) {
             const hojeDia = dataBaseLoop.getDate();
             let proximoDiaMes = diasMesNum.find(dia => dia > hojeDia); // Procura um dia DEPOIS
             if (proximoDiaMes !== undefined) {
+                // Tenta setar no mês atual
                 let dataTeste = new Date(dataBaseLoop.getTime());
                 dataTeste.setDate(proximoDiaMes);
+                
+                // Verifica se setar o dia (ex: 31) não pulou o mês
                 if (dataTeste.getMonth() === dataBaseLoop.getMonth()) {
                     proximaData.setDate(proximoDiaMes);
                 } else {
+                    // Pulou (ex: dia 31 em Fev). Vai pro próximo mês
                     proximaData.setMonth(dataBaseLoop.getMonth() + 1, diasMesNum[0]);
                 }
             } else {
@@ -157,11 +162,12 @@ function calcularProximaExecucao(baseHorario, tipoRecorrencia, diasSemana = [], 
                 proximaData.setMonth(dataBaseLoop.getMonth() + 1, diasMesNum[0]);
             }
         } else {
-            // Não recorrente ou dados inválidos, apenas avança 1 dia
+            // Não recorrente ou dados inválidos (ex: semanal sem dias)
+            // Apenas avança 1 dia para sair do loop
             proximaData.setDate(dataBaseLoop.getDate() + 1);
         }
         
-        // Re-aplica a hora/minuto na nova data
+        // Re-aplica a hora/minuto na nova data (garante a hora correta)
         proximaData.setHours(hora, minuto, 0, 0);
     }
     
@@ -331,7 +337,6 @@ app.post('/alarmes/visto/:id', autenticarToken, async (req, res) => {
         if (!alarme) return res.status(404).json({ success: false, message: "Alarme não encontrado" });
 
         if (alarme.IsRecorrente) {
-            // CORREÇÃO: Passa o Horário BASE (ex: 8:30) para o cálculo
             const proximaData = calcularProximaExecucao(
                 alarme.HorarioBaseRecorrencia || alarme.Horario, 
                 alarme.TipoRecorrencia, alarme.DiasSemana, alarme.DiasMes
@@ -431,7 +436,7 @@ app.get('/alarmes/:id', autenticarToken, async (req, res) => {
 });
 
 // ==================================================================
-// *** CORREÇÃO (BUG 3: Cálculo de Data Recorrente) ***
+// *** CORREÇÃO v11 (BUG: Criação/Edição Recorrente) ***
 // Aplicada nas rotas /alarmes (POST) e /alarmes/:id (PUT)
 // ==================================================================
 
@@ -445,30 +450,33 @@ app.post('/alarmes', autenticarToken, async (req, res) => {
         alarme.UserId = userIdAsObjectId || req.userId; 
         
         // 2. Pega a data/hora exata que o utilizador escolheu no input
-        const dataBase = new Date(alarme.Horario);
+        // Isso é o 'HorarioBase'
+        const dataBaseDoInput = new Date(alarme.Horario);
         
         alarme.Status = "Ativo"; 
-        const agora = new Date();
 
-        if(alarme.IsRecorrente) {
-            // 3. Verifica se a data escolhida já passou
-            if (dataBase <= agora) {
-                // Se já passou, calcula a *próxima* data a partir de agora
-                console.log("[LOG /alarmes] Data recorrente no passado. Calculando próxima...");
-                alarme.Horario = calcularProximaExecucao(
-                    agora, // Base é AGORA
-                    alarme.TipoRecorrencia, 
-                    alarme.DiasSemana, 
-                    alarme.DiasMes
-                );
-            } else {
-                // Se for no futuro (ex: daqui a 2 dias), usa a data exata.
-                console.log("[LOG /alarmes] Data recorrente no futuro. Usando data escolhida.");
-                alarme.Horario = dataBase;
-            }
+        if (alarme.IsRecorrente) {
+            // *** ESTA É A CORREÇÃO ***
+            // Para um alarme recorrente, NÃO importa a DATA que o usuário
+            // escolheu (ex: Sábado 08/11), importa a HORA (8:30) e os
+            // dias da semana (Seg-Sex).
+            // Nós *SEMPRE* calculamos a primeira ocorrência futura.
+            
+            console.log("[LOG /alarmes (POST)] Alarme recorrente. Calculando a primeira ocorrência...");
+            
+            // O 'baseHorario' é a HORA/MINUTO que o usuário quer.
+            // O 'calcularProximaExecucao' vai começar a partir de 'agora'
+            // e achar o primeiro slot.
+            alarme.Horario = calcularProximaExecucao(
+                dataBaseDoInput, // Passamos a data/hora do input (só a hora importa)
+                alarme.TipoRecorrencia, 
+                alarme.DiasSemana, 
+                alarme.DiasMes
+            );
+            
         } else {
-             // Se não for recorrente, apenas usa a data que o utilizador escolheu
-            alarme.Horario = dataBase;
+            // Se não for recorrente, apenas usa a data que o utilizador escolheu
+            alarme.Horario = dataBaseDoInput;
         }
 
         const result = await db.collection('alarmes').insertOne(alarme);
@@ -490,40 +498,39 @@ app.put('/alarmes/:id', autenticarToken, async (req, res) => {
         delete alarmeUpdate._id; 
         
         // 1. Pega a data/hora exata que o utilizador escolheu
-        const dataBase = new Date(alarmeUpdate.Horario);
+        const dataBaseDoInput = new Date(alarmeUpdate.Horario);
+        
         alarmeUpdate.Status = "Ativo"; 
         
         // 2. Garante que o UserId está no tipo correto
         alarmeUpdate.UserId = userIdAsObjectId || userId;
         
+        // 3. Limpa campos de "Adiado"
         delete alarmeUpdate.MensagemOriginal;
         delete alarmeUpdate.HorarioBaseRecorrencia;
 
-        const agora = new Date();
-
-        if(alarmeUpdate.IsRecorrente) {
-            // 3. Verifica se a data escolhida já passou
-            if (dataBase <= agora) {
-                // Se já passou, calcula a *próxima* data a partir de agora
-                console.log("[LOG /alarmes (PUT)] Data recorrente no passado. Calculando próxima...");
-                alarmeUpdate.Horario = calcularProximaExecucao(
-                    agora, // Base é AGORA
-                    alarmeUpdate.TipoRecorrencia, 
-                    alarmeUpdate.DiasSemana, 
-                    alarmeUpdate.DiasMes
-                );
-            } else {
-                // Se for no futuro, usa a data exata.
-                console.log("[LOG /alarmes (PUT)] Data recorrente no futuro. Usando data escolhida.");
-                alarmeUpdate.Horario = dataBase;
-            }
+        if (alarmeUpdate.IsRecorrente) {
+            // *** ESTA É A CORREÇÃO ***
+            // Se está atualizando para ser recorrente, calculamos a 
+            // primeira ocorrência futura a partir de agora.
+            
+            console.log("[LOG /alarmes (PUT)] Alarme recorrente. Calculando a primeira ocorrência...");
+            
+            alarmeUpdate.Horario = calcularProximaExecucao(
+                dataBaseDoInput, // Passamos a data/hora do input (só a hora importa)
+                alarmeUpdate.TipoRecorrencia, 
+                alarmeUpdate.DiasSemana, 
+                alarmeUpdate.DiasMes
+            );
         } else {
-            alarmeUpdate.Horario = dataBase;
+            // Se não for recorrente, usa a data exata do input
+            alarmeUpdate.Horario = dataBaseDoInput;
         }
 
         const result = await db.collection('alarmes').updateOne(
             { _id: new ObjectId(id), $or: [ { UserId: userId }, { UserId: userIdAsObjectId } ] },
             { $set: alarmeUpdate,
+              // Limpa campos de 'adiar' caso existam
               $unset: { MensagemOriginal: "", HorarioBaseRecorrencia: "" } }
         );
         
@@ -560,4 +567,3 @@ app.delete('/alarmes/:id', autenticarToken, async (req, res) => {
 app.listen(port, () => {
     console.log(`API RNLARME rodando na porta ${port}`);
 });
-
