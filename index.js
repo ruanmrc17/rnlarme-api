@@ -565,11 +565,12 @@ app.delete('/alarmes/:id', autenticarToken, async (req, res) => {
             return res.status(404).json({ success: false, message: "Alarme não encontrado" });
         }
         res.status(204).send(); 
-    } catch (e) { res.status(500.json({ success: false, message: e.message }); }
+    } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
 // --- Iniciar Servidor ---
 app.listen(port, () => {
     console.log(`API RNLARME rodando na porta ${port}`);
 });
+
 
