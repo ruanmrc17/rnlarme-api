@@ -20,7 +20,7 @@ let db;
 
 client.connect().then(() => {
     db = client.db("RNLARME_DB");
-    console.log("API conectada ao MongoDB (RNLARME_DB)!");
+    // console.log("API conectada ao MongoDB (RNLARME_DB)!");
 }).catch(err => {
     console.error("Falha ao conectar no MongoDB:", err);
     process.exit(1);
@@ -89,7 +89,7 @@ app.post('/login', async (req, res) => {
                 jwtSecret,
                 { expiresIn: '30d' } 
             );
-            console.log(`[LOG /login] Usuário '${username}' logado com sucesso.`);
+            // console.log(`[LOG /login] Usuário '${username}' logado com sucesso.`);
             res.json({ success: true, token: token });
         } else {
             res.status(401).json({ success: false, message: 'Senha incorreta.' });
@@ -217,7 +217,7 @@ app.get('/alarmes/ativos', autenticarToken, async (req, res) => {
 app.get('/alarmes/historico', autenticarToken, async (req, res) => {
     // console.log(`[LOG /historico] Tentando carregar. UserId (string) = ${req.userId}`);
     try {
-        const statusDeHistorico = ["DisparadoVisto", 1, 2, 3];
+        const statusDeHistorico = ["Disparado / Visto", 1, 2, 3];
         const userIdAsObjectId = tryParseObjectId(req.userId);
 
         const query = {
@@ -415,7 +415,7 @@ app.get('/tasks/cleanup-old-history', async (req, res) => {
             Status: { $in: statusDeHistorico }, 
             Horario: { $lt: dataLimite } 
         });
-        console.log(`[LIMPEZA CRON] ${resultado.deletedCount} alarmes antigos foram apagados.`);
+        // console.log(`[LIMPEZA CRON] ${resultado.deletedCount} alarmes antigos foram apagados.`);
         res.status(200).json({ message: "Limpeza de alarmes antigos concluída.", deletedCount: resultado.deletedCount });
     } catch (e) {
         console.error("[LIMPEZA CRON] Erro:", e);
@@ -441,34 +441,34 @@ app.get('/alarmes/:id', autenticarToken, async (req, res) => {
 
 // POST /alarmes (Criar)
 app.post('/alarmes', autenticarToken, async (req, res) => {
-    console.log(`[LOG /alarmes (POST)] Início da rota.`);
+    // console.log(`[LOG /alarmes (POST)] Início da rota.`);
     try {
         const alarme = req.body;
         const userIdAsObjectId = tryParseObjectId(req.userId);
         
-        console.log("[LOG /alarmes (POST)] Dados recebidos (req.body):");
-        console.log(JSON.stringify(alarme, null, 2));
+        // console.log("[LOG /alarmes (POST)] Dados recebidos (req.body):");
+        // console.log(JSON.stringify(alarme, null, 2));
 
         alarme.UserId = userIdAsObjectId || req.userId; 
         const dataBaseDoInput = new Date(alarme.Horario);
         alarme.Status = "Ativo"; 
 
         if (alarme.IsRecorrente) {
-            console.log("[LOG /alarmes (POST)] 'IsRecorrente' é TRUE. Calculando a primeira ocorrência...");
+            // console.log("[LOG /alarmes (POST)] 'IsRecorrente' é TRUE. Calculando a primeira ocorrência...");
             alarme.Horario = calcularProximaExecucao(
                 dataBaseDoInput,
                 alarme.RecorrenciaTipo, // <-- CORRIGIDO v11.3
                 alarme.DiasDaSemana,   // <-- CORRIGIDO v11.3
                 alarme.DiasDoMes       // <-- CORRIGIDO v11.3
             );
-            console.log(`[LOG /alarmes (POST)] Nova data calculada: ${alarme.Horario}`);
+            // console.log(`[LOG /alarmes (POST)] Nova data calculada: ${alarme.Horario}`);
         } else {
-            console.log("[LOG /alarmes (POST)] 'IsRecorrente' é FALSE. Usando data do input.");
+            // console.log("[LOG /alarmes (POST)] 'IsRecorrente' é FALSE. Usando data do input.");
             alarme.Horario = dataBaseDoInput;
         }
 
         const result = await db.collection('alarmes').insertOne(alarme);
-        console.log("[LOG /alarmes (POST)] Alarme criado com sucesso.");
+        // console.log("[LOG /alarmes (POST)] Alarme criado com sucesso.");
         res.status(201).json({ success: true, insertedId: result.insertedId });
     } catch (e) { 
         console.error("[LOG /alarmes (POST)] ERRO no 'catch':", e);
@@ -478,15 +478,15 @@ app.post('/alarmes', autenticarToken, async (req, res) => {
 
 // PUT /alarmes/:id (Atualizar)
 app.put('/alarmes/:id', autenticarToken, async (req, res) => {
-    console.log(`[LOG /alarmes (PUT)] Início da rota. ID: ${req.params.id}`);
+    // console.log(`[LOG /alarmes (PUT)] Início da rota. ID: ${req.params.id}`);
     try {
         const { id } = req.params; 
         const alarmeUpdate = req.body;
         const userId = req.userId;
         const userIdAsObjectId = tryParseObjectId(userId);
 
-        console.log("[LOG /alarmes (PUT)] Dados recebidos (req.body):");
-        console.log(JSON.stringify(alarmeUpdate, null, 2));
+        // console.log("[LOG /alarmes (PUT)] Dados recebidos (req.body):");
+        // console.log(JSON.stringify(alarmeUpdate, null, 2));
 
         delete alarmeUpdate._id; 
         
@@ -500,7 +500,7 @@ app.put('/alarmes/:id', autenticarToken, async (req, res) => {
         delete alarmeUpdate.HorarioBaseRecorrencia;
 
         if (alarmeUpdate.IsRecorrente) {
-            console.log("[LOG /alarmes (PUT)] 'IsRecorrente' é TRUE. Calculando a primeira ocorrência...");
+            // console.log("[LOG /alarmes (PUT)] 'IsRecorrente' é TRUE. Calculando a primeira ocorrência...");
             
             alarmeUpdate.Horario = calcularProximaExecucao(
                 dataBaseDoInput,
@@ -509,10 +509,10 @@ app.put('/alarmes/:id', autenticarToken, async (req, res) => {
                 alarmeUpdate.DiasDoMes       // <-- CORRIGIDO v11.3
             );
             
-            console.log(`[LOG /alarmes (PUT)] Nova data calculada: ${alarmeUpdate.Horario}`);
+            // console.log(`[LOG /alarmes (PUT)] Nova data calculada: ${alarmeUpdate.Horario}`);
 
         } else {
-            console.log("[LOG /alarmes (PUT)] 'IsRecorrente' é FALSE. Usando data do input.");
+            // console.log("[LOG /alarmes (PUT)] 'IsRecorrente' é FALSE. Usando data do input.");
             alarmeUpdate.Horario = dataBaseDoInput;
         }
 
@@ -527,7 +527,7 @@ app.put('/alarmes/:id', autenticarToken, async (req, res) => {
             return res.status(404).json({ success: false, message: "Alarme não encontrado" });
         }
         
-        console.log("[LOG /alarmes (PUT)] Alarme atualizado com sucesso.");
+        // console.log("[LOG /alarmes (PUT)] Alarme atualizado com sucesso.");
         res.json({ success: true });
 
     } catch (e) { 
