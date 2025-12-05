@@ -241,7 +241,7 @@ app.get('/alarmes/historico', autenticarToken, async (req, res) => {
 // DELETE /alarmes/historico/limpar
 app.delete('/alarmes/historico/limpar', autenticarToken, async (req, res) => {
     try {
-        const statusDeHistorico = ["DisparadoVisto", 1, 2, 3];
+        const statusDeHistorico = ["Disparado / Visto", 1, 2, 3];
         const userIdAsObjectId = tryParseObjectId(req.userId);
 
         const query = {
@@ -314,7 +314,7 @@ app.post('/alarmes/tocar/:id', autenticarToken, async (req, res) => {
             await db.collection('alarmes').updateOne(
                 { _id: new ObjectId(id) }, 
                 { $set: { 
-                    Status: "DisparadoVisto",
+                    Status: "Disparado / Visto",
                     UserId: userIdAsObjectId || userId
                   }, 
                   $unset: { MensagemOriginal: "", HorarioBaseRecorrencia: "" } }
@@ -358,7 +358,7 @@ app.post('/alarmes/visto/:id', autenticarToken, async (req, res) => {
             await db.collection('alarmes').updateOne(
                 { _id: new ObjectId(id) }, 
                 { $set: { 
-                    Status: "DisparadoVisto",
+                    Status: "Disparado / Visto",
                     UserId: userIdAsObjectId || userId
                   },
                   $unset: { MensagemOriginal: "", HorarioBaseRecorrencia: "" } }
@@ -410,7 +410,7 @@ app.get('/tasks/cleanup-old-history', async (req, res) => {
     try {
         const dataLimite = new Date();
         dataLimite.setDate(dataLimite.getDate() - 30);
-        const statusDeHistorico = ["DisparadoVisto", 1, 2, 3]; 
+        const statusDeHistorico = ["Disparado / Visto", 1, 2, 3]; 
         const resultado = await db.collection('alarmes').deleteMany({
             Status: { $in: statusDeHistorico }, 
             Horario: { $lt: dataLimite } 
